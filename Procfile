@@ -1,1 +1,4 @@
-"web: gunicorn main:app" 
+[build]
+  command = "gunicorn app:app"
+
+
