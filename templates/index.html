@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <script>
+        function downloadVideo(event) {
+            event.preventDefault();  // Prevent form submission
+
+            let url = document.getElementById("url").value;
+            let quality = document.getElementById("quality").value;
+            let progressContainer = document.getElementById("progress-container");
+            let progressBar = document.getElementById("progress-bar");
+            let progressText = document.getElementById("progress-text");
+            
+            if (!url) {
+                alert("Please enter a YouTube URL.");
+                return;
+            }
+            
+            progressContainer.style.display = "block";
+            progressBar.style.width = "0%";
+            progressText.innerText = "Starting download...";
+            
+            let formData = new FormData();
+            formData.append("url", url);
+            formData.append("quality", quality);
+            
+            let interval = setInterval(() => {
+                let currentWidth = parseInt(progressBar.style.width);
+                if (currentWidth < 90) {
+                    progressBar.style.width = (currentWidth + 10) + "%";
+                    progressText.innerText = "Downloading: " + (currentWidth + 10) + "%";
+                }
+            }, 1000);
+            
+            fetch("/download", {
+                method: "POST",
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                clearInterval(interval);
+                if (data.error) {
+                    alert("Error: " + data.error);
+                    progressContainer.style.display = "none";
+                } else {
+                    let filename = data.filename;
+                    let encodedFilename = encodeURIComponent(filename);
+                    let downloadLink = document.createElement("a");
+                    downloadLink.href = "/get_file/" + encodedFilename;
+                    downloadLink.download = filename;
+                    document.body.appendChild(downloadLink);
+                    downloadLink.click();
+                    document.body.removeChild(downloadLink);
+                    
+                    progressBar.style.width = "100%";
+                    progressText.innerText = "Download Complete!";
+                    setTimeout(() => { location.reload(); }, 3000);
+                }
+            })
+            .catch(error => {
+                clearInterval(interval);
+                console.error("Error:", error);
+            });
+        }
+    </script>
+    <style>
+        body {
+            background-color: #181818;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            max-width: 600px;
+            margin-top: 50px;
+        }
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+        }
+        .progress {
+            height: 25px;
+            background: #222;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #ff0000, #ff7300);
+            transition: width 0.4s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <h2 class="text-center">🎥 YouTube Video & Audio Downloader 🎶</h2>
+
+        <form onsubmit="downloadVideo(event)">
+            <div class="mb-3">
+                <label for="url" class="form-label">YouTube URL:</label>
+                <input type="text" class="form-control" id="url" name="url" placeholder="Enter YouTube video URL" required>
+            </div>
+
+            <div class="mb-3">
+                <label for="quality" class="form-label">Select Quality:</label>
+                <select class="form-select" id="quality" name="quality">
+                    <option value="best">Best Quality (Highest)</option>
+                    <option value="high">High (720p)</option>
+                    <option value="medium">Medium (480p)</option>
+                    <option value="low">Low (360p or lower)</option>
+                    <option value="audio">Audio Only (Best Music Quality)</option>
+                </select>
+            </div>
+
+            <button type="submit" class="btn btn-primary w-100">Download</button>
+        </form>
+        
+        <div id="progress-container" class="progress-container">
+            <div class="progress">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+            <p id="progress-text" class="mt-2 text-center">Waiting...</p>
+        </div>
+        
+        <footer class="text-center mt-5 text-muted">
+            <p>Made with ❤️ by Mr. Gautam</p>
+        </footer>
+    </div>
+</body>
