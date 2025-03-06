@@ -16,4 +16,4 @@ RUN apt update && apt install -y \
 COPY . .
 
 # Set entrypoint (Modify according to your project)
-CMD ["./your_program"]
+CMD ["gunicorn", "app:app"]
