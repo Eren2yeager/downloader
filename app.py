@@ -8,6 +8,9 @@ app = Flask(__name__)
 DOWNLOAD_FOLDER = os.path.join(os.path.expanduser("~"), "Downloads")
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
+# Path to the cookies file (update if needed)
+COOKIES_FILE = "cookies.txt"
+
 # Quality options for different resolutions
 QUALITY_OPTIONS = {
     "low": "worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]",
@@ -32,7 +35,8 @@ def download():
             "format": format_string,
             "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
             "merge_output_format": "mp4",
-            "postprocessors": [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
+            "postprocessors": [{"key": "FFmpegVideoConvertor", "preferredformat": "mp4"}],
+            "cookiefile": COOKIES_FILE,  # Use the cookies file for authentication
         }
 
         with yt_dlp.YoutubeDL(options) as ydl:
