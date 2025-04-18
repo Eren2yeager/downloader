@@ -13,6 +13,7 @@ from http.cookiejar import MozillaCookieJar
 from urllib.parse import parse_qs, urlparse
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
+import shutil
 
 app = Flask(__name__)
 
@@ -298,6 +299,109 @@ def create_cookie_file():
         
     return cookie_file
 
+def download_with_progress(url, ydl_opts, max_segments=10):
+    """Download video in segments with progress tracking"""
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # First get video info without downloading
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise Exception("Could not get video information")
+
+            # Get video format
+            formats = info.get('formats', [])
+            if not formats:
+                raise Exception("No formats available")
+
+            # Select format based on quality settings
+            selected_format = None
+            for f in formats:
+                if f.get('format_id') == ydl_opts.get('format', ''):
+                    selected_format = f
+                    break
+            
+            if not selected_format:
+                # Use best available format
+                selected_format = formats[-1]
+
+            # Get file size
+            filesize = selected_format.get('filesize', 0)
+            if filesize == 0:
+                filesize = selected_format.get('filesize_approx', 0)
+
+            if filesize == 0:
+                print("Warning: Could not determine file size, proceeding anyway")
+                # Try direct download
+                return ydl.extract_info(url, download=True)
+
+            # Calculate segment size
+            segment_size = max(filesize // max_segments, 1024 * 1024)  # Minimum 1MB segments
+            
+            # Create temporary directory for segments
+            temp_dir = tempfile.mkdtemp()
+            segment_files = []
+
+            try:
+                # Download in segments
+                for i in range(0, filesize, segment_size):
+                    end_byte = min(i + segment_size - 1, filesize - 1)
+                    
+                    # Update headers for this segment
+                    ydl_opts['http_headers']['Range'] = f'bytes={i}-{end_byte}'
+                    
+                    # Unique name for this segment
+                    segment_file = os.path.join(temp_dir, f'segment_{i}_{end_byte}.part')
+                    
+                    # Try to download this segment with retries
+                    max_retries = 5
+                    for retry in range(max_retries):
+                        try:
+                            with yt_dlp.YoutubeDL(ydl_opts) as segment_ydl:
+                                segment_info = segment_ydl.extract_info(url, download=True)
+                                if os.path.exists(segment_file) and os.path.getsize(segment_file) > 0:
+                                    segment_files.append(segment_file)
+                                    print(f"Successfully downloaded segment {len(segment_files)}/{max_segments}")
+                                    break
+                        except Exception as e:
+                            print(f"Error downloading segment {i}: {str(e)}")
+                            if retry < max_retries - 1:
+                                sleep_time = min(30, 5 * (retry + 1))
+                                print(f"Retrying in {sleep_time} seconds...")
+                                time.sleep(sleep_time)
+                            else:
+                                raise Exception(f"Failed to download segment after {max_retries} attempts")
+
+                # Verify all segments were downloaded
+                if len(segment_files) != max_segments:
+                    raise Exception(f"Only downloaded {len(segment_files)}/{max_segments} segments")
+
+                # Combine segments
+                output_file = os.path.join(temp_dir, 'combined_file')
+                with open(output_file, 'wb') as outfile:
+                    for segment in sorted(segment_files):
+                        with open(segment, 'rb') as infile:
+                            outfile.write(infile.read())
+
+                # Clean up segments
+                for segment in segment_files:
+                    try:
+                        os.remove(segment)
+                    except:
+                        pass
+
+                return info
+
+            finally:
+                # Clean up temp directory
+                try:
+                    shutil.rmtree(temp_dir)
+                except:
+                    pass
+
+    except Exception as e:
+        print(f"Download error: {str(e)}")
+        raise
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html", recaptcha_site_key=RECAPTCHA_SITE_KEY)
@@ -352,7 +456,7 @@ def download():
         # Add a small delay before download
         time.sleep(2)
 
-        # Configure yt-dlp options with more fallbacks and better download handling
+        # Configure yt-dlp options
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
             'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
@@ -361,32 +465,19 @@ def download():
             'verbose': True,
             'no_warnings': False,
             'nocheckcertificate': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'mobile'],
-                    'player_skip': [],
-                    'client': ['android', 'mobile']
-                }
-            },
             'socket_timeout': 30,
-            'retries': 10,  # Increased retries
+            'retries': 10,
             'file_access_retries': 10,
             'fragment_retries': 10,
-            'retry_sleep': 5,  # Add delay between retries
-            'max_sleep_interval': 30,  # Maximum sleep between retries
+            'retry_sleep': 5,
+            'max_sleep_interval': 30,
             'skip_download': False,
             'overwrites': True,
             'ignoreerrors': False,
             'logtostderr': True,
             'prefer_insecure': True,
             'cachedir': False,
-            'continuedl': True,  # Enable continued downloads
-            'noresizebuffer': True,  # Disable buffer resizing
-            'buffersize': 1024 * 16,  # 16KB buffer size
-            'http_chunk_size': 1024 * 1024,  # 1MB chunks
-            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")],
-            'external_downloader_args': ['--max-connection-per-server', '16'],  # Increase connections
-            'concurrent_fragment_downloads': 5,  # Download multiple fragments at once
+            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")]
         }
 
         if quality == "audio":
@@ -410,25 +501,15 @@ def download():
                 'merge_output_format': 'mp4'
             })
 
-        # Download with progress tracking and resume capability
-        max_attempts = 3
-        current_attempt = 0
-        while current_attempt < max_attempts:
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    print(f"Download attempt {current_attempt + 1}/{max_attempts}")
-                    info = ydl.extract_info(url, download=True)
-                    if info:
-                        break
-            except Exception as e:
-                current_attempt += 1
-                print(f"Download attempt {current_attempt} failed: {str(e)}")
-                if current_attempt < max_attempts:
-                    sleep_time = min(30, 5 * current_attempt)  # Progressive delay
-                    print(f"Waiting {sleep_time} seconds before retry...")
-                    time.sleep(sleep_time)
-                else:
-                    raise Exception("Maximum download attempts reached")
+        # Try segmented download
+        try:
+            print("Attempting segmented download...")
+            info = download_with_progress(url, ydl_opts)
+        except Exception as e:
+            print(f"Segmented download failed: {str(e)}")
+            print("Falling back to regular download...")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
 
         if not info:
             raise Exception("Download failed - no video information available")
@@ -499,7 +580,6 @@ def download():
         # Clean up on error
         try:
             if os.path.exists(download_dir):
-                import shutil
                 shutil.rmtree(download_dir)
         except:
             pass
