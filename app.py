@@ -237,5 +237,83 @@ def index():
 
     return render_template('index.html')
 
+@app.route('/download', methods=['POST'])
+def download():
+    try:
+        url = request.form.get('url', '').strip()
+        if not url:
+            return jsonify({'error': 'Please enter a YouTube URL'}), 400
+            
+        audio_only = request.form.get('audio_only', 'false').lower() == 'true'
+
+        # Validate URL format
+        if not re.match(r'^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[a-zA-Z0-9_-]+', url):
+            return jsonify({'error': 'Invalid YouTube URL format'}), 400
+
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                progress = float(d['_percent_str'].replace('%', ''))
+                return jsonify({
+                    'progress': progress,
+                    'status': f"Downloading: {d['_percent_str']} of {d['_total_bytes_str']} at {d['_speed_str']}"
+                })
+            elif d['status'] == 'finished':
+                return jsonify({
+                    'progress': 100,
+                    'status': 'Processing video...'
+                })
+
+        # Configure yt-dlp options
+        output_template = os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s')
+        
+        ydl_opts = {
+            'format': 'bestaudio/best' if audio_only else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'outtmpl': output_template,
+            'quiet': False,
+            'no_warnings': True,
+            'progress_hooks': [progress_hook]
+        }
+        
+        if audio_only:
+            ydl_opts.update({
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
+            })
+
+        # Download video
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url)
+            if not info:
+                return jsonify({'error': 'Download failed. Please try again.'}), 400
+                
+            # Get output file path
+            if audio_only:
+                output_file = output_template % {'title': info['title'], 'ext': 'mp3'}
+            else:
+                output_file = output_template % {'title': info['title'], 'ext': 'mp4'}
+            
+            if not os.path.exists(output_file):
+                return jsonify({'error': 'Download failed - output file not found'}), 400
+                
+            # Verify file size
+            file_size = os.path.getsize(output_file)
+            if file_size == 0:
+                os.remove(output_file)
+                return jsonify({'error': 'Download failed - empty file'}), 400
+                
+            # Send file
+            return send_file(
+                output_file,
+                as_attachment=True,
+                download_name=os.path.basename(output_file),
+                mimetype='audio/mpeg' if audio_only else 'video/mp4'
+            )
+    except Exception as e:
+        print(f"Download error: {str(e)}")
+        return jsonify({'error': f'Download failed: {str(e)}'}), 400
+
 if __name__ == '__main__':
     app.run(debug=True)         
