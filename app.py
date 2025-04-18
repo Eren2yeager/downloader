@@ -15,6 +15,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import shutil
 from fake_useragent import UserAgent
+import string
 
 app = Flask(__name__)
 
@@ -74,6 +75,19 @@ INNERTUBE_CONTEXT = {
         'osVersion': '13',
         'platform': 'MOBILE'
     }
+}
+
+# Add these constants at the top after imports
+ANDROID_HEADERS = {
+    'User-Agent': 'com.google.android.youtube/17.31.35 (Linux; U; Android 11)',
+    'Accept': '*/*',
+    'Accept-Language': 'en-US,en',
+    'Accept-Encoding': 'gzip',
+    'x-goog-api-format-version': '2',
+    'x-goog-api-key': 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    'x-youtube-client-name': '3',
+    'x-youtube-client-version': '17.31.35',
+    'content-type': 'application/json'
 }
 
 def get_working_proxy():
@@ -313,6 +327,128 @@ def download_with_progress(url, ydl_opts, max_segments=10):
         print(f"Download error: {str(e)}")
         raise
 
+def generate_session_token():
+    """Generate a random session token"""
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+
+def get_video_info(url):
+    try:
+        # Extract video ID
+        video_id = None
+        if 'youtu.be' in url:
+            video_id = url.split('/')[-1].split('?')[0]
+        else:
+            parsed_url = urlparse(url)
+            video_id = parse_qs(parsed_url.query).get('v', [None])[0]
+            if not video_id:
+                video_id = parsed_url.path.split('/')[-1].split('?')[0]
+
+        if not video_id:
+            print(f"Could not extract video ID from URL: {url}")
+            raise Exception("Could not extract video ID")
+
+        print(f"Extracted video ID: {video_id}")
+
+        # Generate session data
+        session_token = generate_session_token()
+        timestamp = int(time.time())
+        
+        # Create Android client context
+        client_context = {
+            'context': {
+                'client': {
+                    'clientName': 'ANDROID',
+                    'clientVersion': '17.31.35',
+                    'androidSdkVersion': 30,
+                    'osName': 'Android',
+                    'osVersion': '11',
+                    'platform': 'MOBILE',
+                    'clientFormFactor': 'SMALL_FORM_FACTOR',
+                    'timeZone': 'UTC',
+                    'browserName': 'Chrome Mobile',
+                    'browserVersion': '117.0.0.0',
+                    'userAgent': ANDROID_HEADERS['User-Agent'],
+                    'acceptHeader': ANDROID_HEADERS['Accept'],
+                    'deviceMake': 'Google',
+                    'deviceModel': 'Pixel 6',
+                },
+                'user': {
+                    'lockedSafetyMode': False
+                },
+                'request': {
+                    'useSsl': True,
+                    'internalExperimentFlags': [],
+                    'consistencyTokenJars': []
+                }
+            }
+        }
+
+        # First request - Get player
+        player_url = f'https://youtubei.googleapis.com/youtubei/v1/player?key={ANDROID_HEADERS["x-goog-api-key"]}'
+        player_data = {
+            **client_context,
+            'videoId': video_id,
+            'playbackContext': {
+                'contentPlaybackContext': {
+                    'html5Preference': 'HTML5_PREF_WANTS',
+                    'lactMilliseconds': str(timestamp),
+                    'referer': f'https://m.youtube.com/watch?v={video_id}',
+                    'signatureTimestamp': '19369',
+                    'autonavState': 'STATE_ON',
+                    'autoCaptionsDefaultOn': False,
+                }
+            },
+            'racyCheckOk': True,
+            'contentCheckOk': True
+        }
+
+        # Make player request
+        print("Requesting video player data...")
+        response = requests.post(
+            player_url,
+            headers=ANDROID_HEADERS,
+            json=player_data,
+            timeout=15
+        )
+        
+        if response.status_code != 200:
+            print(f"Player request failed with status {response.status_code}")
+            raise Exception("Failed to get video player data")
+
+        player_response = response.json()
+        
+        # Check for errors in player response
+        if 'playabilityStatus' in player_response:
+            status = player_response['playabilityStatus']
+            if status.get('status') != 'OK':
+                error = status.get('reason', 'Unknown error')
+                print(f"Video not playable: {error}")
+                raise Exception(f"Video not available: {error}")
+
+        # Extract necessary info
+        meta = {
+            'id': video_id,
+            'title': player_response.get('videoDetails', {}).get('title', ''),
+            'duration': int(player_response.get('videoDetails', {}).get('lengthSeconds', 0)),
+            'formats': []
+        }
+
+        # Extract formats
+        if 'streamingData' in player_response:
+            formats = []
+            if 'formats' in player_response['streamingData']:
+                formats.extend(player_response['streamingData']['formats'])
+            if 'adaptiveFormats' in player_response['streamingData']:
+                formats.extend(player_response['streamingData']['adaptiveFormats'])
+            
+            meta['formats'] = formats
+
+        return meta
+
+    except Exception as e:
+        print(f"Error in get_video_info: {str(e)}")
+        raise
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html", recaptcha_site_key=RECAPTCHA_SITE_KEY)
@@ -341,13 +477,6 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Get a working proxy
-        proxy = get_working_proxy()
-        if proxy:
-            print("Using proxy for download")
-        else:
-            print("No working proxy found, proceeding without proxy")
-
         # Configure yt-dlp options
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
@@ -360,7 +489,7 @@ def download():
             'retries': 10,
             'file_access_retries': 10,
             'fragment_retries': 10,
-            'retry_sleep': 5,
+            'retry_sleep': lambda n: 5 * (n + 1),
             'max_sleep_interval': 30,
             'skip_download': False,
             'overwrites': True,
@@ -369,12 +498,9 @@ def download():
             'prefer_insecure': True,
             'cachedir': False,
             'no_color': True,
-            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")]
+            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")],
+            'http_headers': ANDROID_HEADERS
         }
-
-        # Add proxy if available
-        if proxy:
-            ydl_opts['proxy'] = proxy['https']
 
         if quality == "audio":
             ydl_opts.update({
@@ -397,35 +523,42 @@ def download():
                 'merge_output_format': 'mp4'
             })
 
-        # Try download with retries and proxy rotation
+        # Try to get video info first
         max_retries = 3
+        video_info = None
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                print(f"Attempt {attempt + 1} to get video info...")
+                video_info = get_video_info(url)
+                if video_info:
+                    print("Successfully got video info")
+                    break
+            except Exception as e:
+                last_error = str(e)
+                print(f"Attempt {attempt + 1} failed: {last_error}")
+                if attempt < max_retries - 1:
+                    time.sleep(5 * (attempt + 1))
+
+        if not video_info:
+            raise Exception(f"Failed to get video information after {max_retries} attempts. Last error: {last_error}")
+
+        # Try download with retries
         for attempt in range(max_retries):
             try:
                 print(f"Download attempt {attempt + 1}/{max_retries}")
                 
                 if attempt > 0:
-                    # Try a different proxy on retry
-                    proxy = get_working_proxy()
-                    if proxy:
-                        ydl_opts['proxy'] = proxy['https']
-                        print(f"Using new proxy for attempt {attempt + 1}")
-                    
                     sleep_time = min(30, 5 * (attempt + 1))
                     print(f"Waiting {sleep_time} seconds before retry...")
                     time.sleep(sleep_time)
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    # First try to extract info without downloading
-                    print("Extracting video information...")
-                    info = ydl.extract_info(url, download=False)
-                    
+                    info = ydl.extract_info(url, download=True)
                     if info:
-                        print("Successfully extracted video info, starting download...")
-                        # Now try the actual download
-                        info = ydl.extract_info(url, download=True)
-                        if info:
-                            print("Download completed successfully")
-                            break
+                        print("Download completed successfully")
+                        break
 
             except Exception as e:
                 print(f"Download attempt {attempt + 1} failed: {str(e)}")
