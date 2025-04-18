@@ -10,6 +10,9 @@ import time
 import json
 from datetime import datetime, timedelta
 from http.cookiejar import MozillaCookieJar
+from urllib.parse import parse_qs, urlparse
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 
 app = Flask(__name__)
 
@@ -53,6 +56,21 @@ PROXY_LIST = [
     'socks5://47.243.95.228:10080'
 ]
 
+# YouTube API constants
+YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY', '')
+INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
+INNERTUBE_CLIENT_VERSION = '2.20240321.04.00'
+INNERTUBE_CONTEXT = {
+    'client': {
+        'clientName': 'ANDROID',
+        'clientVersion': '18.11.36',
+        'androidSdkVersion': 33,
+        'osName': 'Android',
+        'osVersion': '13',
+        'platform': 'MOBILE'
+    }
+}
+
 def get_working_proxy():
     """Test and return a working proxy"""
     for proxy in PROXY_LIST:
@@ -76,22 +94,87 @@ def get_random_user_agent():
     ]
     return random.choice(user_agents)
 
+def create_session():
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
+def get_video_info(url):
+    try:
+        video_id = None
+        if 'youtu.be' in url:
+            video_id = url.split('/')[-1]
+        else:
+            parsed_url = urlparse(url)
+            video_id = parse_qs(parsed_url.query).get('v', [None])[0]
+            if not video_id:
+                video_id = parsed_url.path.split('/')[-1]
+        
+        if not video_id:
+            raise Exception("Could not extract video ID")
+
+        session = create_session()
+        
+        # First, get the initial page data
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.5563.57 Mobile Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://m.youtube.com',
+            'Referer': 'https://m.youtube.com/',
+        }
+        
+        # Get video info using InnerTube API
+        data = {
+            'videoId': video_id,
+            'context': INNERTUBE_CONTEXT,
+            'playbackContext': {
+                'contentPlaybackContext': {
+                    'html5Preference': 'HTML5_PREF_WANTS',
+                }
+            },
+            'racyCheckOk': True,
+            'contentCheckOk': True
+        }
+        
+        response = session.post(
+            'https://www.youtube.com/youtubei/v1/player',
+            params={'key': INNERTUBE_API_KEY},
+            headers={
+                **headers,
+                'Content-Type': 'application/json',
+            },
+            json=data
+        )
+        
+        response.raise_for_status()
+        return response.json()
+    
+    except Exception as e:
+        print(f"Error getting video info: {str(e)}")
+        raise
+
 def get_browser_like_headers():
-    user_agent = "com.google.android.youtube/17.31.35 (Linux; U; Android 11) gzip"
     return {
-        'User-Agent': user_agent,
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.5563.57 Mobile Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate',
         'Origin': 'https://m.youtube.com',
         'Referer': 'https://m.youtube.com/',
-        'Content-Type': 'application/json',
         'X-YouTube-Client-Name': '2',
-        'X-YouTube-Client-Version': '17.31.35',
+        'X-YouTube-Client-Version': INNERTUBE_CLIENT_VERSION,
         'X-Goog-Api-Format-Version': '2',
-        'X-Goog-Visitor-Id': f"CgtVek{random.randint(100000, 999999)}",
-        'X-Origin': 'https://m.youtube.com',
-        'Cookie': f'CONSENT={YOUTUBE_CONSENT}; VISITOR_INFO1_LIVE={random.randint(10**10, (10**11)-1)}; YSC={random.randint(10**10, (10**11)-1)}',
+        'sec-ch-ua': '"Not.A/Brand";v="8", "Chromium";v="114"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-ch-ua-platform': '"Android"',
+        'Cookie': f'CONSENT={YOUTUBE_CONSENT}; VISITOR_INFO1_LIVE={random.randint(10**10, (10**11)-1)}; YSC={random.randint(10**10, (10**11)-1)}'
     }
 
 def verify_recaptcha(response):
@@ -179,6 +262,19 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
+        # Get video info first
+        try:
+            video_info = get_video_info(url)
+            if not video_info:
+                raise Exception("Could not get video information")
+            
+            # Add a small delay
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"Error getting video info: {e}")
+            raise Exception("Failed to get video information. Please try again.")
+
         # Configure yt-dlp options
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
@@ -192,7 +288,11 @@ def download():
                     'player_client': ['android', 'mobile'],
                     'player_skip': [],
                     'client': ['android', 'mobile'],
-                    'player_params': {'playback_context': {'client': {'clientName': 'ANDROID', 'clientVersion': '17.31.35'}}},
+                    'player_params': {
+                        'playback_context': {
+                            'client': INNERTUBE_CONTEXT['client']
+                        }
+                    }
                 }
             },
             'socket_timeout': 15,
@@ -229,6 +329,9 @@ def download():
                 'merge_output_format': 'mp4'
             })
 
+        # Add a small delay before download
+        time.sleep(2)
+
         # Download the video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             print(f"Starting download with options: {ydl_opts}")
@@ -255,6 +358,9 @@ def download():
                 raise Exception("Download failed - empty file")
 
             print(f"File downloaded successfully: {output_file}")
+
+            # Add a small delay before sending
+            time.sleep(1)
 
             # Send the file
             try:
