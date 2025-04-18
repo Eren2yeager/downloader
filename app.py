@@ -41,14 +41,42 @@ except Exception as e:
 INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
 INNERTUBE_CLIENT_VERSION = '2.20240321.04.00'
 
-def generate_session_token():
-    """Generate a random session token"""
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+def create_session():
+    """Create a requests session with retry logic and proper headers"""
+    session = requests.Session()
+    
+    # Configure retry strategy
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    return session
 
-def get_browser_like_headers():
-    """Generate browser-like headers for YouTube requests"""
-    ua = UserAgent()
+def generate_visitor_data():
+    """Generate visitor data for YouTube"""
+    timestamp = int(time.time())
+    random_string = ''.join(random.choices(string.ascii_letters + string.digits, k=32))
     return {
+        'visitorId': random_string,
+        'timestamp': timestamp,
+        'clientName': 'WEB',
+        'clientVersion': '2.20240321.04.00',
+        'osName': 'Windows',
+        'osVersion': '10.0',
+        'platform': 'DESKTOP',
+        'browserName': 'Chrome',
+        'browserVersion': '120.0.0.0',
+    }
+
+def get_browser_like_headers(visitor_data):
+    """Generate browser-like headers with visitor data"""
+    ua = UserAgent()
+    headers = {
         'User-Agent': ua.chrome,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
@@ -60,12 +88,20 @@ def get_browser_like_headers():
         'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-Site': 'none',
         'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0'
+        'Cache-Control': 'max-age=0',
+        'X-YouTube-Client-Name': visitor_data['clientName'],
+        'X-YouTube-Client-Version': visitor_data['clientVersion'],
+        'X-YouTube-Visitor-Id': visitor_data['visitorId'],
     }
+    return headers
 
 def get_video_info(url):
-    """Get video information with improved error handling"""
+    """Get video information with improved session handling"""
     try:
+        # Create new session and visitor data
+        session = create_session()
+        visitor_data = generate_visitor_data()
+        
         # Extract video ID
         video_id = None
         if 'youtu.be' in url:
@@ -82,22 +118,36 @@ def get_video_info(url):
 
         print(f"Extracted video ID: {video_id}")
 
-        # Configure yt-dlp options with improved browser emulation
+        # Configure yt-dlp options with session handling
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,
             'nocheckcertificate': True,
-            'http_headers': get_browser_like_headers(),
+            'http_headers': get_browser_like_headers(visitor_data),
             'cookiesfrombrowser': ('chrome',),
             'extractor_args': {
                 'youtube': {
                     'player_skip': ['js', 'configs', 'webpage'],
-                    'player_client': ['android'],
+                    'player_client': ['web'],
                     'player_skip': ['webpage']
                 }
-            }
+            },
+            'rate_limit': 1000000,  # 1MB/s
+            'retries': 10,
+            'fragment_retries': 10,
+            'skip_unavailable_fragments': True,
+            'extract_flat': 'in_playlist',
+            'playlist_items': '1',
+            'match_filter': None,
+            'geo_bypass': True,
+            'geo_verification_proxy': None,
+            'min_sleep_interval': 1,
+            'max_sleep_interval': 5,
         }
+
+        # Add rate limiting
+        time.sleep(random.uniform(1, 3))
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
@@ -202,6 +252,10 @@ def download():
         if not re.match(r'^(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)[a-zA-Z0-9_-]+', url):
             return jsonify({'error': 'Invalid YouTube URL format'}), 400
 
+        # Create new session and visitor data
+        session = create_session()
+        visitor_data = generate_visitor_data()
+
         def progress_hook(d):
             if d['status'] == 'downloading':
                 progress = float(d['_percent_str'].replace('%', ''))
@@ -215,7 +269,7 @@ def download():
                     'status': 'Processing video...'
                 })
 
-        # Configure yt-dlp options with improved browser emulation
+        # Configure yt-dlp options with session handling
         output_template = os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s')
         
         ydl_opts = {
@@ -224,15 +278,26 @@ def download():
             'quiet': False,
             'no_warnings': True,
             'progress_hooks': [progress_hook],
-            'http_headers': get_browser_like_headers(),
+            'http_headers': get_browser_like_headers(visitor_data),
             'cookiesfrombrowser': ('chrome',),
             'extractor_args': {
                 'youtube': {
                     'player_skip': ['js', 'configs', 'webpage'],
-                    'player_client': ['android'],
+                    'player_client': ['web'],
                     'player_skip': ['webpage']
                 }
-            }
+            },
+            'rate_limit': 1000000,  # 1MB/s
+            'retries': 10,
+            'fragment_retries': 10,
+            'skip_unavailable_fragments': True,
+            'extract_flat': 'in_playlist',
+            'playlist_items': '1',
+            'match_filter': None,
+            'geo_bypass': True,
+            'geo_verification_proxy': None,
+            'min_sleep_interval': 1,
+            'max_sleep_interval': 5,
         }
         
         if audio_only:
@@ -243,6 +308,9 @@ def download():
                     'preferredquality': '192',
                 }]
             })
+
+        # Add rate limiting
+        time.sleep(random.uniform(1, 3))
 
         # Download video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
