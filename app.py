@@ -19,13 +19,13 @@ else:
 # Create download folder if it doesn't exist
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-# Quality options for different resolutions
+# Updated Quality options for better compatibility
 QUALITY_OPTIONS = {
-    "low": "worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]",
-    "medium": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]",
-    "high": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]",
-    "best": "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]",  # Highest quality
-    "audio": "bestaudio[ext=m4a]/bestaudio",  # Best audio-only
+    "low": "worst[ext=mp4][height>=360]",
+    "medium": "best[ext=mp4][height<=480]",
+    "high": "best[ext=mp4][height<=720]",
+    "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",  # Highest quality
+    "audio": "bestaudio/best"  # Best audio-only
 }
 
 @app.route("/", methods=["GET"])
@@ -44,7 +44,8 @@ def download():
         options = {
             "format": format_string,
             "outtmpl": output_template,
-            "cookiefile": "cookies.txt"
+            "cookiefile": "cookies.txt",
+            "verbose": True  # Add verbose output for debugging
         }
 
         # Special case for audio-only download in mp3 format
@@ -54,8 +55,6 @@ def download():
                 "preferredcodec": "mp3",
                 "preferredquality": "192"
             }]
-            # Ensure output ends in .mp3
-            options["outtmpl"] = os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s")
         else:
             options["merge_output_format"] = "mp4"
             options["postprocessors"] = [{
@@ -64,6 +63,9 @@ def download():
             }]
 
         with yt_dlp.YoutubeDL(options) as ydl:
+            # First, extract info without downloading to check available formats
+            info = ydl.extract_info(url, download=False)
+            # Then download with the selected format
             info = ydl.extract_info(url, download=True)
             title = info.get("title", "downloaded")
             if quality == "audio":
@@ -73,11 +75,13 @@ def download():
 
         filepath = os.path.join(DOWNLOAD_FOLDER, filename)
         if os.path.exists(filepath):
-            return jsonify({"filename": filename})  # Return JSON with the filename
+            return jsonify({"filename": filename})
         else:
-            return jsonify({"error": "Could not download or convert the file."})
+            # Return more detailed error information
+            return jsonify({"error": f"File not found at {filepath}. Available formats: {[f['format'] for f in info['formats']]}"})
 
     except Exception as e:
+        # Return more detailed error information
         return jsonify({"error": str(e)})
 
 @app.route("/get_file/<filename>")
