@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -16,15 +15,20 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
+# Flask
+instance/
+.webassets-cache
+
 # Virtual Environment
-.env
-.venv
 venv/
 ENV/
+env/
+.env
 
 # IDE
 .idea/
@@ -32,13 +36,14 @@ ENV/
 *.swp
 *.swo
 
-# Project specific
-downloads/
-temp/
-*.log
-youtube_cookies.txt
-cookies.txt
+# OS
+.DS_Store
+Thumbs.db
 
-# Docker
-.docker/
-docker-compose.override.yml
+# Application specific
+yt_downloads/
+logs/
+*.log
+*.mp4
+*.mp3
+*.part

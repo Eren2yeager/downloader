@@ -1,10 +1,5 @@
-Flask==3.0.0
+Flask==3.0.2
 yt-dlp==2024.3.10
-gunicorn==21.2.0
-ffmpeg-python==0.2.0
-requests[socks]==2.31.0
-PySocks==1.7.1
+requests==2.31.0
 fake-useragent==1.4.0
 python-dotenv==1.0.1
-Werkzeug==3.0.1
-urllib3==2.2.1

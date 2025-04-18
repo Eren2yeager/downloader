@@ -3,23 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Download YouTube videos and audio in MP4 and MP3 format">
+    <meta name="keywords" content="YouTube downloader, MP4 download, MP3 download">
     <title>YouTube Downloader</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            max-width: 800px;
+            max-width: 600px;
             margin: 0 auto;
             padding: 20px;
             background-color: #f5f5f5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
         .container {
             background-color: white;
             padding: 30px;
             border-radius: 10px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            flex: 1;
         }
         h1 {
-            color: #333;
+            color: #ff0000;
             text-align: center;
             margin-bottom: 30px;
         }
@@ -29,20 +35,29 @@
             gap: 20px;
         }
         input[type="text"] {
-            padding: 10px;
+            padding: 12px;
             border: 1px solid #ddd;
             border-radius: 5px;
             font-size: 16px;
+            width: 100%;
+            box-sizing: border-box;
         }
-        .quality-options {
+        .format-options {
             display: flex;
             gap: 20px;
             justify-content: center;
+            flex-wrap: wrap;
         }
-        .quality-option {
+        .format-option {
             display: flex;
             align-items: center;
             gap: 5px;
+            padding: 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .format-option:hover {
+            background-color: #f0f0f0;
         }
         button {
             background-color: #ff0000;
@@ -54,8 +69,9 @@
             font-size: 16px;
             font-weight: bold;
             transition: background-color 0.2s;
+            width: 100%;
         }
-        button:hover:not(:disabled) {
+        button:hover {
             background-color: #cc0000;
         }
         button:disabled {
@@ -80,41 +96,19 @@
             background-color: #e6ffe6;
             display: none;
         }
-        .progress-container {
-            display: none;
-            margin-top: 20px;
-        }
-        .progress-bar {
-            width: 100%;
-            height: 20px;
-            background-color: #f0f0f0;
-            border-radius: 10px;
-            overflow: hidden;
-        }
-        .progress {
-            width: 0%;
-            height: 100%;
-            background-color: #4CAF50;
-            transition: width 0.3s ease;
-        }
-        .status {
+        footer {
             text-align: center;
-            margin-top: 10px;
+            margin-top: 20px;
+            padding: 10px;
             color: #666;
         }
-        .spinner {
-            display: none;
-            width: 40px;
-            height: 40px;
-            margin: 20px auto;
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #ff0000;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        @media (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+            .container {
+                padding: 20px;
+            }
         }
     </style>
 </head>
@@ -122,53 +116,40 @@
     <div class="container">
         <h1>YouTube Downloader</h1>
         <form id="downloadForm">
-            <input type="text" name="url" id="url" placeholder="Enter YouTube URL" required 
-                   pattern="^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[a-zA-Z0-9_-]{11}.*$"
-                   title="Please enter a valid YouTube URL">
-            <div class="quality-options">
-                <label class="quality-option">
-                    <input type="radio" name="audio_only" value="false" checked>
-                    <span>Video (Best Quality)</span>
+            <input type="text" name="url" placeholder="Enter YouTube URL" required>
+            <div class="format-options">
+                <label class="format-option">
+                    <input type="radio" name="format" value="video" checked>
+                    <span>Video (MP4)</span>
                 </label>
-                <label class="quality-option">
-                    <input type="radio" name="audio_only" value="true">
-                    <span>Audio Only (MP3)</span>
+                <label class="format-option">
+                    <input type="radio" name="format" value="audio">
+                    <span>Audio (MP3)</span>
                 </label>
             </div>
-            <button type="submit" id="downloadBtn">Download</button>
+            <button type="submit">Download</button>
         </form>
         <div id="error" class="error"></div>
         <div id="success" class="success"></div>
-        <div class="spinner" id="spinner"></div>
-        <div class="progress-container" id="progressContainer">
-            <div class="progress-bar">
-                <div class="progress" id="progress"></div>
-            </div>
-            <div class="status" id="status">Preparing download...</div>
-        </div>
     </div>
+    <footer>
+        <p>Download YouTube videos and audio in high quality</p>
+    </footer>
 
     <script>
         document.getElementById('downloadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
             const form = this;
-            const url = document.getElementById('url').value;
-            const downloadBtn = document.getElementById('downloadBtn');
             const error = document.getElementById('error');
             const success = document.getElementById('success');
-            const spinner = document.getElementById('spinner');
-            const progressContainer = document.getElementById('progressContainer');
-            const progress = document.getElementById('progress');
-            const status = document.getElementById('status');
+            const button = form.querySelector('button');
 
             // Reset UI
             error.style.display = 'none';
             success.style.display = 'none';
-            downloadBtn.disabled = true;
-            spinner.style.display = 'block';
-            progressContainer.style.display = 'none';
-            progress.style.width = '0%';
+            button.disabled = true;
+            button.textContent = 'Downloading...';
 
             try {
                 const formData = new FormData(form);
@@ -182,57 +163,26 @@
                     throw new Error(errorData.error || 'Download failed');
                 }
 
-                const contentType = response.headers.get('content-type');
-                if (contentType && contentType.includes('application/json')) {
-                    // Handle progress updates
-                    const reader = response.body.getReader();
-                    progressContainer.style.display = 'block';
-                    spinner.style.display = 'none';
+                // Handle file download
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = response.headers.get('content-disposition')?.split('filename=')[1] || 'download';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
 
-                    while (true) {
-                        const {done, value} = await reader.read();
-                        if (done) break;
-
-                        const text = new TextDecoder().decode(value);
-                        try {
-                            const data = JSON.parse(text);
-                            if (data.progress) {
-                                progress.style.width = `${data.progress}%`;
-                                status.textContent = data.status || `Progress: ${data.progress}%`;
-                            }
-                        } catch (e) {
-                            console.error('Error parsing progress:', e);
-                        }
-                    }
-                } else {
-                    // Handle file download
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = response.headers.get('content-disposition')?.split('filename=')[1] || 'download';
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    document.body.removeChild(a);
-
-                    success.textContent = 'Download completed successfully!';
-                    success.style.display = 'block';
-                }
+                success.textContent = 'Download completed successfully!';
+                success.style.display = 'block';
             } catch (err) {
                 error.textContent = err.message || 'An error occurred during download';
                 error.style.display = 'block';
-                console.error('Download error:', err);
             } finally {
-                downloadBtn.disabled = false;
-                spinner.style.display = 'none';
+                button.disabled = false;
+                button.textContent = 'Download';
             }
-        });
-
-        // URL validation
-        document.getElementById('url').addEventListener('input', function() {
-            const isValid = this.checkValidity();
-            document.getElementById('downloadBtn').disabled = !isValid;
         });
     </script>
 </body>
