@@ -10,9 +10,13 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Install system dependencies and cleanup in the same layer
 RUN apt-get update && \
     apt-get upgrade -y && \
-    apt-get install -y --no-install-recommends ffmpeg && \
+    apt-get install -y --no-install-recommends \
+    ffmpeg \
+    ca-certificates \
+    openssl && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    update-ca-certificates
 
 # Set working directory
 WORKDIR /app
@@ -24,7 +28,7 @@ RUN mkdir -p /app/downloads && chmod 755 /app/downloads
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt --require-hashes
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the rest of the application
 COPY . .

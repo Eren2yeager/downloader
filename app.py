@@ -76,7 +76,9 @@ def download():
             "file_access_retries": 3,
             "fragment_retries": 3,
             "skip_download": False,
-            "rm_cachedir": True
+            "rm_cachedir": True,
+            "legacy_server_connect": True,
+            "no_check_certificates": True
         }
 
         if quality == "audio":
