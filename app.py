@@ -114,9 +114,8 @@ def download():
                 "Sec-Fetch-User": "?1",
                 "DNT": "1"
             },
-            "cookiesfrombrowser": ["chrome"],  # Try to use Chrome cookies if available
-            "sleep_interval_requests": 1,  # Add delay between requests
-            "sleep_interval": 5,  # Add delay between downloads
+            "sleep_interval_requests": 1,
+            "sleep_interval": 5,
             "max_sleep_interval": 10,
             "sleep_interval_subtitles": 0
         }
@@ -127,6 +126,14 @@ def download():
                 "preferredcodec": "mp3",
                 "preferredquality": "192"
             }]
+            options["format"] = "bestaudio/best"
+        else:
+            if quality == "high":
+                options["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+            elif quality == "medium":
+                options["format"] = "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
+            elif quality == "low":
+                options["format"] = "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
 
         print("Starting download with options:", options)
 
