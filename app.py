@@ -78,6 +78,8 @@ def get_random_user_agent():
 
 def get_browser_like_headers():
     user_agent = get_random_user_agent()
+    chrome_version = "122.0.0.0"
+    
     return {
         'User-Agent': user_agent,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -90,11 +92,20 @@ def get_browser_like_headers():
         'Sec-Fetch-Site': 'none',
         'Sec-Fetch-User': '?1',
         'Cache-Control': 'max-age=0',
-        'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+        'sec-ch-ua': f'"Chromium";v="{chrome_version}", "Google Chrome";v="{chrome_version}", "Not(A:Brand";v="24"',
         'sec-ch-ua-mobile': '?0',
         'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-platform-version': '"15.0.0"',
+        'Sec-CH-UA-Arch': '"x86"',
+        'Sec-CH-UA-Full-Version': chrome_version,
+        'Sec-CH-UA-Full-Version-List': f'"Chromium";v="{chrome_version}", "Google Chrome";v="{chrome_version}", "Not(A:Brand";v="24.0.0.0"',
         'DNT': '1',
-        'Pragma': 'no-cache'
+        'Pragma': 'no-cache',
+        'Priority': 'u=0, i',
+        'Origin': 'https://www.youtube.com',
+        'Referer': 'https://www.youtube.com/',
+        'X-YouTube-Client-Name': '1',
+        'X-YouTube-Client-Version': '2.20240321.04.00'
     }
 
 def verify_recaptcha(response):
@@ -133,10 +144,15 @@ def create_cookie_file():
             f'.youtube.com\tTRUE\t/\tFALSE\t{current_time + 3600}\tGPS\t1',
             # PREF cookie
             f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tPREF\tf6=8&hl=en&f5=30000',
+            # YSC cookie
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tYSC\t{random.randint(10**10, (10**11)-1)}',
             # Additional cookies
             f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tLOGIN_INFO\tdummy_token',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tSAPISID\t{random.randint(10**10, (10**11)-1)}',
             f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tSID\tdummy_sid',
-            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\t__Secure-3PSID\tdummy_3psid'
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tSSID\t{random.randint(10**10, (10**11)-1)}',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tHSID\t{random.randint(10**10, (10**11)-1)}',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tAEC\t{random.randint(10**10, (10**11)-1)}'
         ]
         
         # Write each cookie on a new line
@@ -185,9 +201,6 @@ def download():
         try:
             cookie_file = create_cookie_file()
             print(f"Cookie file created at: {cookie_file}")
-            # Debug: Print cookie file contents
-            with open(cookie_file, 'r', encoding='utf-8') as f:
-                print("Cookie file contents:", f.read())
         except Exception as e:
             print(f"Error creating cookie file: {e}")
             cookie_file = None
@@ -219,7 +232,21 @@ def download():
             "external_downloader": None,
             "format_sort": ["res", "ext:mp4:m4a", "codec:h264:aac", "size", "br", "asr"],
             "allow_unplayable_formats": True,
-            "check_formats": False
+            "check_formats": False,
+            "ap_mso": None,
+            "ap_password": None,
+            "extract_flat": False,
+            "mark_watched": False,
+            "no_sponsorblock": True,
+            "sponsorblock_chapter_skip": None,
+            "merge_output_format": "mp4",
+            "final_ext": "mp4",
+            "postprocessor_args": {
+                "ffmpeg": ["-c", "copy"]
+            },
+            "youtube_include_dash_manifest": True,
+            "youtube_include_hls_manifest": True,
+            "prefer_native_hls": True
         }
 
         if proxy:
