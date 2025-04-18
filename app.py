@@ -33,13 +33,13 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0'
 ]
 
-# Quality options for different resolutions
+# Quality options using format IDs
 QUALITY_OPTIONS = {
-    "low": "18",  # 360p
-    "medium": "22",  # 720p
-    "high": "137+140/22",  # 1080p+audio / fallback 720p
-    "best": "137+140/22/18",  # 1080p+audio / 720p / 360p
-    "audio": "140/bestaudio"  # m4a audio / fallback best audio
+    "low": "18/135+140",  # 360p
+    "medium": "22/136+140",  # 720p
+    "high": "22/137+140",  # 1080p if available, else 720p
+    "best": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",  # Best quality up to 1080p
+    "audio": "140/bestaudio[ext=m4a]/bestaudio"  # m4a audio / fallback best audio
 }
 
 @app.route("/", methods=["GET"])
@@ -58,29 +58,25 @@ def download():
         format_string = QUALITY_OPTIONS.get(quality, "best")
         output_template = os.path.join(download_dir, "%(title)s.%(ext)s")
 
-        # Enhanced options to avoid bot detection
+        # Enhanced options without cookie dependency
         options = {
             "format": format_string,
             "outtmpl": output_template,
             "verbose": True,
-            "no_warnings": False,
-            # Add headers to appear more like a browser
+            "no_warnings": True,
             "http_headers": {
                 "User-Agent": random.choice(USER_AGENTS),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-us,en;q=0.5",
-                "Sec-Fetch-Mode": "navigate",
-                "Connection": "keep-alive"
+                "Sec-Fetch-Mode": "navigate"
             },
-            # Additional options to bypass restrictions
             "nocheckcertificate": True,
-            "ignoreerrors": False,
-            "logtostderr": False,
-            "quiet": False,
-            "no_warnings": True,
-            "extract_flat": False,
-            # Cookie handling
-            "cookiesfrombrowser": ("chrome",),  # Try to use Chrome cookies
+            "extract_flat": "in_playlist",
+            "extractor_retries": 3,
+            "file_access_retries": 3,
+            "fragment_retries": 3,
+            "skip_download": False,
+            "rm_cachedir": True
         }
 
         if quality == "audio":
@@ -89,17 +85,16 @@ def download():
                 "preferredcodec": "mp3",
                 "preferredquality": "192"
             }]
-            options["format"] = "bestaudio/best"
 
-        print(f"Download options: {options}")
+        print(f"Starting download with options: {options}")
 
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
-                # First try without download to check availability
+                # Extract info first
                 info = ydl.extract_info(url, download=False)
                 print(f"Video info extracted: {info.get('title')}")
                 
-                # Then proceed with download
+                # Proceed with download
                 info = ydl.extract_info(url, download=True)
                 title = info.get("title", "downloaded")
                 
@@ -126,6 +121,20 @@ def download():
                         print(f"Cleanup error: {e}")
                     return response
                 else:
+                    # Try to find the actual file if filename doesn't match exactly
+                    files = os.listdir(download_dir)
+                    if files:  # If there are any files in the directory
+                        actual_file = files[0]  # Take the first file
+                        actual_filepath = os.path.join(download_dir, actual_file)
+                        response = send_file(actual_filepath, as_attachment=True)
+                        # Clean up
+                        try:
+                            os.remove(actual_filepath)
+                            os.rmdir(download_dir)
+                        except Exception as e:
+                            print(f"Cleanup error: {e}")
+                        return response
+                    
                     return jsonify({
                         "error": "File not found after download",
                         "expected_path": filepath,
@@ -137,7 +146,7 @@ def download():
                 print(f"Download error: {str(e)}")
                 return jsonify({
                     "error": str(e),
-                    "details": "YouTube might be blocking this request. Try again later."
+                    "details": "Failed to download. Please try a different quality or video."
                 })
 
     except Exception as e:
