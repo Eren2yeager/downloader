@@ -5,8 +5,7 @@ FROM python:3.10-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FLASK_ENV=production \
-    PYTHONPATH=/app
+    FLASK_ENV=production
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -16,8 +15,8 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Create downloads directory (platform-independent way)
-RUN mkdir -p /app/downloads
+# Create downloads directory with proper permissions
+RUN mkdir -p /app/downloads && chmod 777 /app/downloads
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
@@ -28,12 +27,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application
 COPY . .
 
-# Create a non-root user and set permissions
-RUN useradd -m appuser && \
-    chown -R appuser:appuser /app && \
-    chmod -R 755 /app
+# Ensure proper permissions for the app directory
+RUN chown -R 1000:1000 /app && \
+    chmod -R 755 /app && \
+    chmod 777 /app/downloads
 
-USER appuser
+# Use a non-root user
+USER 1000
 
 # Expose the port the app runs on
 EXPOSE 5000
