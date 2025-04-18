@@ -10,6 +10,11 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# reCAPTCHA settings
+RECAPTCHA_SITE_KEY = "YOUR_SITE_KEY"  # Replace with your site key
+RECAPTCHA_SECRET_KEY = "YOUR_SECRET_KEY"  # Replace with your secret key
+RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
+
 # Configure download folder
 if os.environ.get('FLASK_ENV') == 'production':
     DOWNLOAD_FOLDER = '/tmp/downloads'
@@ -35,12 +40,39 @@ def get_random_user_agent():
     ]
     return random.choice(user_agents)
 
+def verify_recaptcha(response):
+    try:
+        data = {
+            'secret': RECAPTCHA_SECRET_KEY,
+            'response': response
+        }
+        r = requests.post(RECAPTCHA_VERIFY_URL, data=data)
+        result = r.json()
+        return result.get('success', False)
+    except Exception as e:
+        print(f"reCAPTCHA verification error: {e}")
+        return False
+
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html")
+    return render_template("index.html", recaptcha_site_key=RECAPTCHA_SITE_KEY)
 
 @app.route("/download", methods=["POST"])
 def download():
+    # Verify reCAPTCHA first
+    recaptcha_response = request.form.get('g-recaptcha-response')
+    if not recaptcha_response:
+        return jsonify({
+            "error": "Please complete the reCAPTCHA verification.",
+            "details": "reCAPTCHA verification is required"
+        })
+
+    if not verify_recaptcha(recaptcha_response):
+        return jsonify({
+            "error": "reCAPTCHA verification failed. Please try again.",
+            "details": "Invalid reCAPTCHA response"
+        })
+
     url = request.form["url"]
     quality = request.form["quality"]
 
