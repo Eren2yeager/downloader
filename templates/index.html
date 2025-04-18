@@ -62,9 +62,10 @@
                 }
             })
             .catch(error => {
-                clearInterval(interval);
-                console.error("Error:", error);
-            });
+    clearInterval(interval);
+    alert("An error occurred: " + error.message);  // 👈 add this
+    console.error("Error:", error);
+});
         }
     </script>
     <style>

@@ -1,11 +1,22 @@
 from flask import Flask, render_template, request, jsonify, send_file
 import yt_dlp
 import os
+import platform
 
 app = Flask(__name__)
 
-# Use the system's Downloads folder for storing videos
-DOWNLOAD_FOLDER = os.path.join(os.path.expanduser("~"), "Downloads")
+# Configure download folder based on environment and platform
+if os.environ.get('FLASK_ENV') == 'production':
+    # For production (Docker/cloud)
+    DOWNLOAD_FOLDER = os.path.join(os.path.sep, 'app', 'downloads')
+else:
+    # For local development - use platform-appropriate downloads folder
+    if platform.system() == 'Windows':
+        DOWNLOAD_FOLDER = os.path.join(os.environ.get('USERPROFILE', ''), 'Downloads')
+    else:
+        DOWNLOAD_FOLDER = os.path.join(os.path.expanduser('~'), 'Downloads')
+
+# Create download folder if it doesn't exist
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
 # Quality options for different resolutions
@@ -28,19 +39,43 @@ def download():
 
     try:
         format_string = QUALITY_OPTIONS.get(quality, "best")  # Default to best
+        output_template = os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s")
+
         options = {
             "format": format_string,
-            "outtmpl": os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s"),
-            "merge_output_format": "mp4",
-            "postprocessors": [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}],
+            "outtmpl": output_template,
             "cookiefile": "cookies.txt"
         }
 
+        # Special case for audio-only download in mp3 format
+        if quality == "audio":
+            options["postprocessors"] = [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192"
+            }]
+            # Ensure output ends in .mp3
+            options["outtmpl"] = os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s")
+        else:
+            options["merge_output_format"] = "mp4"
+            options["postprocessors"] = [{
+                "key": "FFmpegVideoConvertor",
+                "preferedformat": "mp4"
+            }]
+
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
-            filename = ydl.prepare_filename(info).replace(".webm", ".mp4").replace(".m4a", ".mp4")
+            title = info.get("title", "downloaded")
+            if quality == "audio":
+                filename = f"{title}.mp3"
+            else:
+                filename = f"{title}.mp4"
 
-        return jsonify({"filename": filename})  # Return JSON with the filename
+        filepath = os.path.join(DOWNLOAD_FOLDER, filename)
+        if os.path.exists(filepath):
+            return jsonify({"filename": filename})  # Return JSON with the filename
+        else:
+            return jsonify({"error": "Could not download or convert the file."})
 
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -54,4 +89,4 @@ def get_file(filename):
         return "File not found", 404
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True)         
