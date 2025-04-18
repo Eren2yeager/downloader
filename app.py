@@ -6,9 +6,13 @@ import tempfile
 import random
 import re
 import requests
+import json
 from datetime import datetime
 
 app = Flask(__name__)
+
+# YouTube consent cookie (helps bypass some restrictions)
+YOUTUBE_CONSENT = 'YES+cb.20240318-17-p0.en-GB+FX+{}'.format(random.randint(100, 999))
 
 # reCAPTCHA settings
 RECAPTCHA_SITE_KEY = os.environ.get('RECAPTCHA_SITE_KEY')
@@ -59,6 +63,27 @@ def verify_recaptcha(response):
         print(f"reCAPTCHA verification error: {e}")
         return False
 
+def create_cookie_file():
+    cookie_data = [
+        {
+            "name": "CONSENT",
+            "value": YOUTUBE_CONSENT,
+            "domain": ".youtube.com",
+            "path": "/"
+        },
+        {
+            "name": "CONSENT",
+            "value": YOUTUBE_CONSENT,
+            "domain": "youtube.com",
+            "path": "/"
+        }
+    ]
+    
+    cookie_file = os.path.join(tempfile.gettempdir(), 'youtube_cookies.txt')
+    with open(cookie_file, 'w') as f:
+        json.dump(cookie_data, f)
+    return cookie_file
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html", recaptcha_site_key=RECAPTCHA_SITE_KEY)
@@ -86,42 +111,30 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Enhanced options with better anti-detection measures
+        # Create cookie file
+        cookie_file = create_cookie_file()
+
+        # Basic options with necessary settings
         options = {
             "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
-            "verbose": True,
-            "no_warnings": True,
+            "cookiefile": cookie_file,
+            "cookiesfrombrowser": None,  # Disable browser cookies
             "quiet": False,
+            "no_warnings": True,
             "extract_flat": False,
-            "no_check_certificates": True,
-            "extractor_retries": 3,
-            "file_access_retries": 3,
-            "fragment_retries": 3,
-            "retries": 3,
-            "socket_timeout": 15,
-            "concurrent_fragment_downloads": 1,
-            "throttledratelimit": 100000,
-            "http_chunk_size": 10485760,
-            "buffersize": 1024,
             "http_headers": {
                 "User-Agent": get_random_user_agent(),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
                 "Accept-Encoding": "gzip, deflate",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1",
-                "TE": "trailers"
+                "Connection": "keep-alive"
             }
         }
 
-        # Quality-specific settings
+        # Set format based on quality
         if quality == "audio":
             options.update({
-                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "format": "bestaudio",
                 "postprocessors": [{
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
@@ -129,24 +142,21 @@ def download():
                 }]
             })
         else:
-            format_map = {
-                "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                "high": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best",
-                "medium": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best",
-                "low": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360][ext=mp4]/best"
-            }
-            options["format"] = format_map.get(quality, format_map["best"])
-            options["merge_output_format"] = "mp4"
+            if quality == "best":
+                options["format"] = "best"
+            elif quality == "high":
+                options["format"] = "best[height<=720]"
+            elif quality == "medium":
+                options["format"] = "best[height<=480]"
+            elif quality == "low":
+                options["format"] = "best[height<=360]"
 
         print("Starting download with options:", options)
 
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
-                # Extract info first with a delay
+                # Extract info first
                 print(f"Extracting info for URL: {url}")
-                import time
-                time.sleep(2)  # Add a small delay before extraction
-                
                 meta = ydl.extract_info(url, download=False)
                 if not meta:
                     raise Exception("Could not extract video metadata")
@@ -162,19 +172,19 @@ def download():
                 
                 options["outtmpl"] = os.path.join(download_dir, filename)
                 
-                # Download with retry logic and delays
+                # Download with retry logic
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
                         print(f"Download attempt {attempt + 1}/{max_retries}")
-                        time.sleep(2)  # Add delay before download
                         ydl.download([url])
                         break
                     except Exception as e:
                         if attempt == max_retries - 1:
                             raise
                         print(f"Attempt {attempt + 1} failed: {str(e)}")
-                        time.sleep(5 * (attempt + 1))
+                        import time
+                        time.sleep(3)
                 
                 filepath = os.path.join(download_dir, filename)
                 if os.path.exists(filepath):
@@ -183,6 +193,7 @@ def download():
                     try:
                         os.remove(filepath)
                         os.rmdir(download_dir)
+                        os.remove(cookie_file)  # Clean up cookie file
                     except Exception as e:
                         print(f"Cleanup error: {e}")
                     return response
@@ -197,6 +208,7 @@ def download():
                     try:
                         os.remove(actual_filepath)
                         os.rmdir(download_dir)
+                        os.remove(cookie_file)  # Clean up cookie file
                     except Exception as e:
                         print(f"Cleanup error: {e}")
                     return response
@@ -204,13 +216,18 @@ def download():
                 raise Exception("No file found after download")
 
             except Exception as e:
+                try:
+                    os.remove(cookie_file)  # Clean up cookie file on error
+                except:
+                    pass
+                    
                 error_msg = str(e)
                 if "Sign in to confirm you're not a bot" in error_msg:
-                    error_msg = "YouTube is requesting verification. Please try a different video or quality setting."
+                    error_msg = "This video requires age verification. Please try a different video."
                 print(f"Download error: {error_msg}")
                 return jsonify({
                     "error": error_msg,
-                    "details": "Try again with a different quality setting or video"
+                    "details": "Try a different video or quality setting"
                 })
 
     except Exception as e:
