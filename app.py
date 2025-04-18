@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response
 import yt_dlp
 import os
 import platform
@@ -8,6 +8,7 @@ import re
 import requests
 import time
 import json
+import hashlib
 from datetime import datetime, timedelta
 from http.cookiejar import MozillaCookieJar
 from urllib.parse import parse_qs, urlparse
@@ -89,6 +90,58 @@ ANDROID_HEADERS = {
     'x-youtube-client-version': '17.31.35',
     'content-type': 'application/json'
 }
+
+# Configuration
+API_VERSION = "v1"
+DOWNLOAD_STATES = {
+    'INIT': 0,
+    'EXTRACTING': 1,
+    'DOWNLOADING': 2,
+    'CONVERTING': 3,
+    'COMPLETE': 4,
+    'ERROR': -1
+}
+
+class DownloadTracker:
+    def __init__(self):
+        self.downloads = {}
+        
+    def create_download(self, video_id):
+        download_id = hashlib.md5(f"{video_id}_{time.time()}".encode()).hexdigest()
+        self.downloads[download_id] = {
+            'video_id': video_id,
+            'state': DOWNLOAD_STATES['INIT'],
+            'progress': 0,
+            'title': '',
+            'error': None,
+            'output_file': None,
+            'format': None,
+            'start_time': time.time()
+        }
+        return download_id
+    
+    def update_download(self, download_id, **kwargs):
+        if download_id in self.downloads:
+            self.downloads[download_id].update(kwargs)
+    
+    def get_download(self, download_id):
+        return self.downloads.get(download_id)
+    
+    def cleanup_old_downloads(self, max_age_hours=1):
+        current_time = time.time()
+        to_remove = []
+        for download_id, download in self.downloads.items():
+            if current_time - download['start_time'] > max_age_hours * 3600:
+                to_remove.append(download_id)
+                if download['output_file'] and os.path.exists(download['output_file']):
+                    try:
+                        os.remove(download['output_file'])
+                    except:
+                        pass
+        for download_id in to_remove:
+            del self.downloads[download_id]
+
+download_tracker = DownloadTracker()
 
 def get_working_proxy():
     """Test and return a working proxy"""
@@ -331,312 +384,175 @@ def generate_session_token():
     """Generate a random session token"""
     return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
 
-def get_video_info(url):
+def get_video_info(video_id):
     try:
-        # Extract video ID
-        video_id = None
-        if 'youtu.be' in url:
-            video_id = url.split('/')[-1].split('?')[0]
-        else:
-            parsed_url = urlparse(url)
-            video_id = parse_qs(parsed_url.query).get('v', [None])[0]
-            if not video_id:
-                video_id = parsed_url.path.split('/')[-1].split('?')[0]
-
-        if not video_id:
-            print(f"Could not extract video ID from URL: {url}")
-            raise Exception("Could not extract video ID")
-
-        print(f"Extracted video ID: {video_id}")
-
-        # Generate session data
-        session_token = generate_session_token()
-        timestamp = int(time.time())
+        url = f"https://www.youtube.com/watch?v={video_id}"
         
-        # Create Android client context
-        client_context = {
-            'context': {
-                'client': {
-                    'clientName': 'ANDROID',
-                    'clientVersion': '17.31.35',
-                    'androidSdkVersion': 30,
-                    'osName': 'Android',
-                    'osVersion': '11',
-                    'platform': 'MOBILE',
-                    'clientFormFactor': 'SMALL_FORM_FACTOR',
-                    'timeZone': 'UTC',
-                    'browserName': 'Chrome Mobile',
-                    'browserVersion': '117.0.0.0',
-                    'userAgent': ANDROID_HEADERS['User-Agent'],
-                    'acceptHeader': ANDROID_HEADERS['Accept'],
-                    'deviceMake': 'Google',
-                    'deviceModel': 'Pixel 6',
-                },
-                'user': {
-                    'lockedSafetyMode': False
-                },
-                'request': {
-                    'useSsl': True,
-                    'internalExperimentFlags': [],
-                    'consistencyTokenJars': []
-                }
-            }
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True
         }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+    except Exception as e:
+        print(f"Error getting video info: {str(e)}")
+        return None
 
-        # First request - Get player
-        player_url = f'https://youtubei.googleapis.com/youtubei/v1/player?key={ANDROID_HEADERS["x-goog-api-key"]}'
-        player_data = {
-            **client_context,
-            'videoId': video_id,
-            'playbackContext': {
-                'contentPlaybackContext': {
-                    'html5Preference': 'HTML5_PREF_WANTS',
-                    'lactMilliseconds': str(timestamp),
-                    'referer': f'https://m.youtube.com/watch?v={video_id}',
-                    'signatureTimestamp': '19369',
-                    'autonavState': 'STATE_ON',
-                    'autoCaptionsDefaultOn': False,
-                }
-            },
-            'racyCheckOk': True,
-            'contentCheckOk': True
-        }
+@app.route('/api/v1/init', methods=['GET'])
+def init_download():
+    try:
+        # Get authorization token (implement your own auth logic)
+        auth_token = request.args.get('a')
+        if not auth_token:
+            return jsonify({'error': 1, 'message': 'Missing authorization'})
+            
+        # Create convert URL
+        base_url = request.url_root.rstrip('/')
+        convert_url = f"{base_url}/api/v1/convert"
+        
+        return jsonify({
+            'error': 0,
+            'convertURL': convert_url
+        })
+    except Exception as e:
+        return jsonify({'error': 1, 'message': str(e)})
 
-        # Make player request
-        print("Requesting video player data...")
-        response = requests.post(
-            player_url,
-            headers=ANDROID_HEADERS,
-            json=player_data,
-            timeout=15
+@app.route('/api/v1/convert', methods=['GET'])
+def convert():
+    try:
+        video_id = request.args.get('v')
+        format_type = request.args.get('f', 'mp3')
+        
+        if not video_id:
+            return jsonify({'error': 1, 'message': 'Missing video ID'})
+            
+        # Create download entry
+        download_id = download_tracker.create_download(video_id)
+        
+        # Get video info
+        info = get_video_info(video_id)
+        if not info:
+            return jsonify({'error': 2, 'message': 'Could not get video info'})
+            
+        # Update download info
+        download_tracker.update_download(
+            download_id,
+            state=DOWNLOAD_STATES['EXTRACTING'],
+            title=info.get('title', ''),
+            format=format_type
         )
         
-        if response.status_code != 200:
-            print(f"Player request failed with status {response.status_code}")
-            raise Exception("Failed to get video player data")
-
-        player_response = response.json()
+        # Create progress and download URLs
+        base_url = request.url_root.rstrip('/')
+        progress_url = f"{base_url}/api/v1/progress/{download_id}"
+        download_url = f"{base_url}/api/v1/download/{download_id}"
         
-        # Check for errors in player response
-        if 'playabilityStatus' in player_response:
-            status = player_response['playabilityStatus']
-            if status.get('status') != 'OK':
-                error = status.get('reason', 'Unknown error')
-                print(f"Video not playable: {error}")
-                raise Exception(f"Video not available: {error}")
-
-        # Extract necessary info
-        meta = {
-            'id': video_id,
-            'title': player_response.get('videoDetails', {}).get('title', ''),
-            'duration': int(player_response.get('videoDetails', {}).get('lengthSeconds', 0)),
-            'formats': []
-        }
-
-        # Extract formats
-        if 'streamingData' in player_response:
-            formats = []
-            if 'formats' in player_response['streamingData']:
-                formats.extend(player_response['streamingData']['formats'])
-            if 'adaptiveFormats' in player_response['streamingData']:
-                formats.extend(player_response['streamingData']['adaptiveFormats'])
-            
-            meta['formats'] = formats
-
-        return meta
-
+        return jsonify({
+            'error': 0,
+            'progressURL': progress_url,
+            'downloadURL': download_url,
+            'title': info.get('title', '')
+        })
     except Exception as e:
-        print(f"Error in get_video_info: {str(e)}")
-        raise
+        return jsonify({'error': 1, 'message': str(e)})
 
-@app.route("/", methods=["GET"])
-def index():
-    return render_template("index.html", recaptcha_site_key=RECAPTCHA_SITE_KEY)
-
-@app.route("/download", methods=["POST"])
-def download():
-    # Verify reCAPTCHA first
-    recaptcha_response = request.form.get('g-recaptcha-response')
-    if not recaptcha_response:
-        return jsonify({
-            "error": "Please complete the reCAPTCHA verification.",
-            "details": "reCAPTCHA verification is required"
-        })
-
-    if not verify_recaptcha(recaptcha_response):
-        return jsonify({
-            "error": "reCAPTCHA verification failed. Please try again.",
-            "details": "Invalid reCAPTCHA response"
-        })
-
-    url = request.form["url"]
-    quality = request.form["quality"]
-
+@app.route('/api/v1/progress/<download_id>', methods=['GET'])
+def progress(download_id):
     try:
-        # Create a unique download directory
-        download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
-        print(f"Download directory: {download_dir}")
+        download = download_tracker.get_download(download_id)
+        if not download:
+            return jsonify({'error': 1, 'message': 'Invalid download ID'})
+            
+        return jsonify({
+            'error': 0,
+            'progress': download['state'],
+            'title': download['title']
+        })
+    except Exception as e:
+        return jsonify({'error': 1, 'message': str(e)})
 
+@app.route('/api/v1/download/<download_id>', methods=['GET'])
+def download_file(download_id):
+    try:
+        download = download_tracker.get_download(download_id)
+        if not download:
+            return jsonify({'error': 1, 'message': 'Invalid download ID'})
+            
+        video_id = download['video_id']
+        format_type = download['format']
+        
         # Configure yt-dlp options
+        output_template = os.path.join(tempfile.gettempdir(), f'{video_id}.%(ext)s')
+        
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
-            'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
+            'format': 'bestaudio/best' if format_type == 'mp3' else 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+            'outtmpl': output_template,
             'quiet': False,
-            'verbose': True,
-            'no_warnings': False,
-            'nocheckcertificate': True,
-            'socket_timeout': 30,
-            'retries': 10,
-            'file_access_retries': 10,
-            'fragment_retries': 10,
-            'retry_sleep': lambda n: 5 * (n + 1),
-            'max_sleep_interval': 30,
-            'skip_download': False,
-            'overwrites': True,
-            'ignoreerrors': False,
-            'logtostderr': True,
-            'prefer_insecure': True,
-            'cachedir': False,
-            'no_color': True,
-            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")],
-            'http_headers': ANDROID_HEADERS
+            'no_warnings': True,
+            'progress_hooks': [lambda d: download_tracker.update_download(
+                download_id,
+                state=DOWNLOAD_STATES['DOWNLOADING'],
+                progress=d.get('downloaded_bytes', 0)
+            )]
         }
-
-        if quality == "audio":
+        
+        if format_type == 'mp3':
             ydl_opts.update({
-                'format': 'bestaudio/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
-                }],
+                }]
             })
-        else:
-            quality_formats = {
-                'best': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'high': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]',
-                'medium': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]',
-                'low': 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]'
-            }
-            ydl_opts.update({
-                'format': quality_formats.get(quality, 'best'),
-                'merge_output_format': 'mp4'
-            })
-
-        # Try to get video info first
-        max_retries = 3
-        video_info = None
-        last_error = None
-
-        for attempt in range(max_retries):
-            try:
-                print(f"Attempt {attempt + 1} to get video info...")
-                video_info = get_video_info(url)
-                if video_info:
-                    print("Successfully got video info")
-                    break
-            except Exception as e:
-                last_error = str(e)
-                print(f"Attempt {attempt + 1} failed: {last_error}")
-                if attempt < max_retries - 1:
-                    time.sleep(5 * (attempt + 1))
-
-        if not video_info:
-            raise Exception(f"Failed to get video information after {max_retries} attempts. Last error: {last_error}")
-
-        # Try download with retries
-        for attempt in range(max_retries):
-            try:
-                print(f"Download attempt {attempt + 1}/{max_retries}")
+        
+        # Download video
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}")
+            if not info:
+                raise Exception("Failed to download video")
                 
-                if attempt > 0:
-                    sleep_time = min(30, 5 * (attempt + 1))
-                    print(f"Waiting {sleep_time} seconds before retry...")
-                    time.sleep(sleep_time)
-
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    if info:
-                        print("Download completed successfully")
-                        break
-
-            except Exception as e:
-                print(f"Download attempt {attempt + 1} failed: {str(e)}")
-                if attempt < max_retries - 1:
-                    continue
-                else:
-                    raise Exception(f"Download failed after {max_retries} attempts")
-
-        if not info:
-            raise Exception("Download failed - no video information available")
-
-        # Get the output file path
-        video_title = info.get('title', f'video_{int(time.time())}')
-        video_title = re.sub(r'[<>:"/\\|?*]', '', video_title).strip()[:200]
-        ext = 'mp3' if quality == "audio" else 'mp4'
-        output_file = os.path.join(download_dir, f"{video_title}.{ext}")
-
-        # Verify the file exists and has content
-        if not os.path.exists(output_file):
-            # Try to find any file in the directory
-            files = os.listdir(download_dir)
-            if files:
-                output_file = os.path.join(download_dir, files[0])
+            # Get output file path
+            if format_type == 'mp3':
+                output_file = output_template.replace('.%(ext)s', '.mp3')
             else:
+                output_file = output_template.replace('.%(ext)s', '.mp4')
+            
+            if not os.path.exists(output_file):
                 raise Exception("Download failed - file not found")
-
-        if os.path.getsize(output_file) == 0:
-            raise Exception("Download failed - empty file")
-
-        print(f"File downloaded successfully: {output_file}")
-
-        # Send the file
-        try:
-            response = send_file(
+                
+            # Update download status
+            download_tracker.update_download(
+                download_id,
+                state=DOWNLOAD_STATES['COMPLETE'],
+                output_file=output_file
+            )
+            
+            # Send file
+            return send_file(
                 output_file,
                 as_attachment=True,
-                download_name=os.path.basename(output_file),
-                mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
+                download_name=f"{info.get('title', video_id)}.{format_type}",
+                mimetype='audio/mpeg' if format_type == 'mp3' else 'video/mp4'
             )
-
-            # Clean up after sending
-            @response.call_on_close
-            def cleanup():
-                try:
-                    if os.path.exists(output_file):
-                        os.remove(output_file)
-                    if os.path.exists(download_dir):
-                        os.rmdir(download_dir)
-                except Exception as e:
-                    print(f"Cleanup error: {e}")
-
-            return response
-
-        except Exception as e:
-            print(f"Error sending file: {e}")
-            raise
-
+            
     except Exception as e:
-        error_msg = str(e)
-        if "Sign in to confirm you're not a bot" in error_msg:
-            error_msg = "YouTube is detecting automated access. Please try again with a different video or quality setting."
-        print(f"Download error: {error_msg}")
-        
-        # Clean up on error
-        try:
-            if os.path.exists(download_dir):
-                shutil.rmtree(download_dir)
-        except:
-            pass
-        
-        return jsonify({
-            "error": error_msg,
-            "details": "Try a different video or quality setting"
-        })
+        download_tracker.update_download(
+            download_id,
+            state=DOWNLOAD_STATES['ERROR'],
+            error=str(e)
+        )
+        return jsonify({'error': 1, 'message': str(e)})
 
-@app.route("/get_file/<filename>")
-def get_file(filename):
-    return "File download method changed", 410
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-if __name__ == "__main__":
+# Cleanup task
+@app.before_request
+def cleanup():
+    download_tracker.cleanup_old_downloads()
+
+if __name__ == '__main__':
     app.run(debug=True)         
