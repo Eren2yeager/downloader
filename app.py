@@ -11,9 +11,16 @@ from datetime import datetime
 app = Flask(__name__)
 
 # reCAPTCHA settings
-RECAPTCHA_SITE_KEY = "YOUR_SITE_KEY"  # Replace with your site key
-RECAPTCHA_SECRET_KEY = "YOUR_SECRET_KEY"  # Replace with your secret key
+RECAPTCHA_SITE_KEY = os.environ.get('RECAPTCHA_SITE_KEY')
+RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
+
+if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
+    print("Warning: reCAPTCHA keys not set. Please set RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY environment variables.")
+    # For development only, you might want to set default keys
+    if os.environ.get('FLASK_ENV') == 'development':
+        RECAPTCHA_SITE_KEY = "YOUR_SITE_KEY"
+        RECAPTCHA_SECRET_KEY = "YOUR_SECRET_KEY"
 
 # Configure download folder
 if os.environ.get('FLASK_ENV') == 'production':

@@ -115,6 +115,9 @@
             display: flex;
             justify-content: center;
             margin: 20px 0;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 10px;
         }
     </style>
 </head>
@@ -139,7 +142,7 @@
 
             <!-- Add reCAPTCHA widget -->
             <div class="recaptcha-container">
-                <div class="g-recaptcha" data-sitekey="YOUR_SITE_KEY"></div>
+                <div class="g-recaptcha" data-sitekey="{{ recaptcha_site_key }}"></div>
             </div>
 
             <button type="submit" class="btn btn-primary w-100">Download</button>
