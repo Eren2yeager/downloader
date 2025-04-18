@@ -17,7 +17,6 @@ RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
 
 if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
     print("Warning: reCAPTCHA keys not set. Please set RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY environment variables.")
-    # For development only, you might want to set default keys
     if os.environ.get('FLASK_ENV') == 'development':
         RECAPTCHA_SITE_KEY = "YOUR_SITE_KEY"
         RECAPTCHA_SECRET_KEY = "YOUR_SECRET_KEY"
@@ -87,60 +86,67 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Enhanced options with anti-bot detection measures
+        # Enhanced options with better anti-detection measures
         options = {
             "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
-            "format": "best" if quality != "audio" else "bestaudio",
             "verbose": True,
             "no_warnings": True,
-            "nocheckcertificate": True,
-            "no_check_certificates": True,
             "quiet": False,
-            "extractor_retries": 5,
-            "file_access_retries": 5,
-            "fragment_retries": 5,
-            "retry_sleep_functions": {"http": lambda n: 5 * (n + 1)},
-            "socket_timeout": 30,
+            "extract_flat": False,
+            "no_check_certificates": True,
+            "extractor_retries": 3,
+            "file_access_retries": 3,
+            "fragment_retries": 3,
+            "retries": 3,
+            "socket_timeout": 15,
+            "concurrent_fragment_downloads": 1,
+            "throttledratelimit": 100000,
+            "http_chunk_size": 10485760,
+            "buffersize": 1024,
             "http_headers": {
                 "User-Agent": get_random_user_agent(),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.5",
-                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Encoding": "gzip, deflate",
                 "Connection": "keep-alive",
                 "Upgrade-Insecure-Requests": "1",
                 "Sec-Fetch-Dest": "document",
                 "Sec-Fetch-Mode": "navigate",
                 "Sec-Fetch-Site": "none",
                 "Sec-Fetch-User": "?1",
-                "DNT": "1"
-            },
-            "sleep_interval_requests": 1,
-            "sleep_interval": 5,
-            "max_sleep_interval": 10,
-            "sleep_interval_subtitles": 0
+                "TE": "trailers"
+            }
         }
 
+        # Quality-specific settings
         if quality == "audio":
-            options["postprocessors"] = [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192"
-            }]
-            options["format"] = "bestaudio/best"
+            options.update({
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192"
+                }]
+            })
         else:
-            if quality == "high":
-                options["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
-            elif quality == "medium":
-                options["format"] = "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
-            elif quality == "low":
-                options["format"] = "bestvideo[height<=360]+bestaudio/best[height<=360]/best"
+            format_map = {
+                "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "high": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best",
+                "medium": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best",
+                "low": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360][ext=mp4]/best"
+            }
+            options["format"] = format_map.get(quality, format_map["best"])
+            options["merge_output_format"] = "mp4"
 
         print("Starting download with options:", options)
 
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
-                # Extract info first
+                # Extract info first with a delay
                 print(f"Extracting info for URL: {url}")
+                import time
+                time.sleep(2)  # Add a small delay before extraction
+                
                 meta = ydl.extract_info(url, download=False)
                 if not meta:
                     raise Exception("Could not extract video metadata")
@@ -156,19 +162,18 @@ def download():
                 
                 options["outtmpl"] = os.path.join(download_dir, filename)
                 
-                # Download with retry logic
+                # Download with retry logic and delays
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
                         print(f"Download attempt {attempt + 1}/{max_retries}")
+                        time.sleep(2)  # Add delay before download
                         ydl.download([url])
                         break
                     except Exception as e:
                         if attempt == max_retries - 1:
                             raise
                         print(f"Attempt {attempt + 1} failed: {str(e)}")
-                        # Wait before retry
-                        import time
                         time.sleep(5 * (attempt + 1))
                 
                 filepath = os.path.join(download_dir, filename)
@@ -201,7 +206,7 @@ def download():
             except Exception as e:
                 error_msg = str(e)
                 if "Sign in to confirm you're not a bot" in error_msg:
-                    error_msg = "YouTube is requesting verification. Please try again in a few minutes or try a different video."
+                    error_msg = "YouTube is requesting verification. Please try a different video or quality setting."
                 print(f"Download error: {error_msg}")
                 return jsonify({
                     "error": error_msg,
