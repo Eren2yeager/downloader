@@ -50,6 +50,25 @@ def get_random_user_agent():
     ]
     return random.choice(user_agents)
 
+def get_browser_like_headers():
+    user_agent = get_random_user_agent()
+    return {
+        'User-Agent': user_agent,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+        'sec-ch-ua': '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
+    }
+
 def verify_recaptcha(response):
     try:
         data = {
@@ -121,41 +140,28 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Create cookie file
-        try:
-            cookie_file = create_cookie_file()
-            print(f"Cookie file created at: {cookie_file}")
-            # Debug: Print cookie file contents
-            with open(cookie_file, 'r', encoding='utf-8') as f:
-                print("Cookie file contents:", f.read())
-        except Exception as e:
-            print(f"Error creating cookie file: {e}")
-            cookie_file = None
-
-        # Basic options with necessary settings
+        # Basic options with enhanced browser-like settings
         options = {
             "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
             "quiet": False,
             "no_warnings": True,
             "extract_flat": False,
-            "http_headers": {
-                "User-Agent": get_random_user_agent(),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Accept-Encoding": "gzip, deflate",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1"
-            }
+            "http_headers": get_browser_like_headers(),
+            "nocheckcertificate": True,
+            "prefer_insecure": True,
+            "sleep_interval": 1,
+            "max_sleep_interval": 5,
+            "sleep_interval_requests": 1,
+            "ignoreerrors": False,
+            "no_color": True,
+            "geo_bypass": True,
+            "geo_bypass_country": "US"
         }
-
-        # Add cookie file if created successfully
-        if cookie_file:
-            options["cookiefile"] = cookie_file
 
         # Set format based on quality
         if quality == "audio":
             options.update({
-                "format": "bestaudio/best",
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
                 "postprocessors": [{
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
@@ -163,14 +169,13 @@ def download():
                 }]
             })
         else:
-            if quality == "best":
-                options["format"] = "bestvideo+bestaudio/best"
-            elif quality == "high":
-                options["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]"
-            elif quality == "medium":
-                options["format"] = "bestvideo[height<=480]+bestaudio/best[height<=480]"
-            elif quality == "low":
-                options["format"] = "bestvideo[height<=360]+bestaudio/best[height<=360]"
+            format_map = {
+                "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "high": "(bestvideo[height<=720][ext=mp4]//bestvideo[height<=720])+(bestaudio[ext=m4a]/bestaudio)/best[height<=720]",
+                "medium": "(bestvideo[height<=480][ext=mp4]//bestvideo[height<=480])+(bestaudio[ext=m4a]/bestaudio)/best[height<=480]",
+                "low": "(bestvideo[height<=360][ext=mp4]//bestvideo[height<=360])+(bestaudio[ext=m4a]/bestaudio)/best[height<=360]"
+            }
+            options["format"] = format_map.get(quality, format_map["best"])
 
         print("Starting download with options:", options)
 
@@ -205,7 +210,7 @@ def download():
                             raise
                         print(f"Attempt {attempt + 1} failed: {str(e)}")
                         import time
-                        time.sleep(3)
+                        time.sleep(3 * (attempt + 1))
                 
                 filepath = os.path.join(download_dir, filename)
                 if os.path.exists(filepath):
@@ -214,8 +219,6 @@ def download():
                     try:
                         os.remove(filepath)
                         os.rmdir(download_dir)
-                        if cookie_file:
-                            os.remove(cookie_file)  # Clean up cookie file
                     except Exception as e:
                         print(f"Cleanup error: {e}")
                     return response
@@ -230,8 +233,6 @@ def download():
                     try:
                         os.remove(actual_filepath)
                         os.rmdir(download_dir)
-                        if cookie_file:
-                            os.remove(cookie_file)  # Clean up cookie file
                     except Exception as e:
                         print(f"Cleanup error: {e}")
                     return response
@@ -239,12 +240,6 @@ def download():
                 raise Exception("No file found after download")
 
             except Exception as e:
-                if cookie_file:
-                    try:
-                        os.remove(cookie_file)  # Clean up cookie file on error
-                    except:
-                        pass
-                    
                 error_msg = str(e)
                 if "Sign in to confirm you're not a bot" in error_msg:
                     error_msg = "This video requires age verification. Please try a different video."
