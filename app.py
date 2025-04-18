@@ -21,6 +21,29 @@ RECAPTCHA_SITE_KEY = os.environ.get('RECAPTCHA_SITE_KEY')
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
 
+if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
+    print("Warning: reCAPTCHA keys not set. Please set RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY environment variables.")
+    if os.environ.get('FLASK_ENV') == 'development':
+        RECAPTCHA_SITE_KEY = "YOUR_SITE_KEY"
+        RECAPTCHA_SECRET_KEY = "YOUR_SECRET_KEY"
+
+# Configure download folder
+if os.environ.get('FLASK_ENV') == 'production':
+    DOWNLOAD_FOLDER = '/tmp/downloads'
+else:
+    if platform.system() == 'Windows':
+        DOWNLOAD_FOLDER = os.path.join(os.environ.get('USERPROFILE', ''), 'Downloads')
+    else:
+        DOWNLOAD_FOLDER = os.path.join(os.path.expanduser('~'), 'Downloads')
+
+# Ensure download folder exists
+try:
+    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+except Exception as e:
+    print(f"Error creating download folder: {e}")
+    DOWNLOAD_FOLDER = tempfile.mkdtemp()
+    print(f"Using temporary download folder: {DOWNLOAD_FOLDER}")
+
 # List of free SOCKS5 proxies (update these regularly)
 PROXY_LIST = [
     'socks5://51.79.51.246:443',
