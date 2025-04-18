@@ -61,9 +61,33 @@ mkdir logs
 flask run --debug
 ```
 
-### Production
+### Production Deployment Options
+
+#### Option 1: Using Gunicorn (Recommended for Linux/macOS)
 ```bash
+# Install Gunicorn if not already installed
+pip install gunicorn
+
+# Run with Gunicorn
 gunicorn -w 4 -b 0.0.0.0:8000 app:app
+```
+
+#### Option 2: Using Waitress (Recommended for Windows)
+```bash
+# Install Waitress
+pip install waitress
+
+# Run with Waitress
+waitress-serve --port=8000 app:app
+```
+
+#### Option 3: Using Flask's built-in server (Not recommended for production)
+```bash
+# Set environment to production
+export FLASK_ENV=production  # On Windows: set FLASK_ENV=production
+
+# Run Flask
+python app.py
 ```
 
 ## Usage
