@@ -45,7 +45,26 @@ def generate_session_token():
     """Generate a random session token"""
     return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
 
+def get_browser_like_headers():
+    """Generate browser-like headers for YouTube requests"""
+    ua = UserAgent()
+    return {
+        'User-Agent': ua.chrome,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0'
+    }
+
 def get_video_info(url):
+    """Get video information with improved error handling"""
     try:
         # Extract video ID
         video_id = None
@@ -63,89 +82,22 @@ def get_video_info(url):
 
         print(f"Extracted video ID: {video_id}")
 
-        # Generate session data
-        session_token = generate_session_token()
-        timestamp = int(time.time())
-
-        # Create headers for YouTube API request
-        headers = {
-            'User-Agent': 'com.google.android.youtube/17.31.35 (Linux; U; Android 11)',
-            'Accept': '*/*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip',
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': INNERTUBE_API_KEY,
-            'X-YouTube-Client-Name': '3',
-            'X-YouTube-Client-Version': '17.31.35',
-            'Origin': 'https://www.youtube.com',
-            'Referer': f'https://www.youtube.com/watch?v={video_id}'
-        }
-
-        # Create request body
-        request_body = {
-            'context': {
-                'client': {
-                    'clientName': 'ANDROID',
-                    'clientVersion': '17.31.35',
-                    'androidSdkVersion': 30,
-                    'osName': 'Android',
-                    'osVersion': '11',
-                    'platform': 'MOBILE',
-                    'clientFormFactor': 'SMALL_FORM_FACTOR',
-                    'timeZone': 'UTC',
-                    'browserName': 'Chrome Mobile',
-                    'browserVersion': '117.0.0.0',
-                    'acceptHeader': '*/*'
-                },
-                'user': {
-                    'lockedSafetyMode': False
-                },
-                'request': {
-                    'useSsl': True,
-                    'internalExperimentFlags': [],
-                    'consistencyTokenJars': []
-                }
-            },
-            'videoId': video_id,
-            'playbackContext': {
-                'contentPlaybackContext': {
-                    'html5Preference': 'HTML5_PREF_WANTS',
-                    'lactMilliseconds': str(timestamp),
-                    'referer': f'https://www.youtube.com/watch?v={video_id}',
-                    'signatureTimestamp': '19369',
-                    'autonavState': 'STATE_ON',
-                    'autoCaptionsDefaultOn': False
-                }
-            },
-            'racyCheckOk': True,
-            'contentCheckOk': True
-        }
-
-        # Make request to YouTube API
-        response = requests.post(
-            f'https://youtubei.googleapis.com/youtubei/v1/player?key={INNERTUBE_API_KEY}',
-            headers=headers,
-            json=request_body,
-            timeout=15
-        )
-
-        if response.status_code != 200:
-            raise Exception(f"YouTube API request failed with status {response.status_code}")
-
-        data = response.json()
-        
-        # Configure yt-dlp options with the obtained data
+        # Configure yt-dlp options with improved browser emulation
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'extract_flat': True,
             'nocheckcertificate': True,
-            'http_headers': headers
+            'http_headers': get_browser_like_headers(),
+            'cookiesfrombrowser': ('chrome',),
+            'extractor_args': {
+                'youtube': {
+                    'player_skip': ['js', 'configs', 'webpage'],
+                    'player_client': ['android'],
+                    'player_skip': ['webpage']
+                }
+            }
         }
-
-        # Add YouTube API data to yt-dlp options
-        if 'streamingData' in data:
-            ydl_opts['player_response'] = data
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
@@ -263,7 +215,7 @@ def download():
                     'status': 'Processing video...'
                 })
 
-        # Configure yt-dlp options
+        # Configure yt-dlp options with improved browser emulation
         output_template = os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s')
         
         ydl_opts = {
@@ -271,7 +223,16 @@ def download():
             'outtmpl': output_template,
             'quiet': False,
             'no_warnings': True,
-            'progress_hooks': [progress_hook]
+            'progress_hooks': [progress_hook],
+            'http_headers': get_browser_like_headers(),
+            'cookiesfrombrowser': ('chrome',),
+            'extractor_args': {
+                'youtube': {
+                    'player_skip': ['js', 'configs', 'webpage'],
+                    'player_client': ['android'],
+                    'player_skip': ['webpage']
+                }
+            }
         }
         
         if audio_only:
