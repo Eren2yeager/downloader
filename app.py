@@ -189,6 +189,7 @@ def download():
     quality = request.form["quality"]
 
     try:
+        # Create a unique download directory
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
@@ -209,7 +210,6 @@ def download():
         options = {
             "quiet": True,
             "no_warnings": True,
-            "extract_flat": True,
             "http_headers": get_browser_like_headers(),
             "nocheckcertificate": True,
             "prefer_insecure": True,
@@ -226,6 +226,7 @@ def download():
             "force_generic_extractor": False,
             "concurrent_fragment_downloads": 1,
             "noplaylist": True,
+            "extract_flat": False,
             "extractor_retries": 3,
             "file_access_retries": 3,
             "hls_prefer_native": True,
@@ -233,20 +234,19 @@ def download():
             "format_sort": ["res", "ext:mp4:m4a", "codec:h264:aac", "size", "br", "asr"],
             "allow_unplayable_formats": True,
             "check_formats": False,
-            "ap_mso": None,
-            "ap_password": None,
-            "extract_flat": False,
-            "mark_watched": False,
-            "no_sponsorblock": True,
-            "sponsorblock_chapter_skip": None,
+            "youtube_include_dash_manifest": True,
+            "youtube_include_hls_manifest": True,
+            "prefer_native_hls": True,
+            "writethumbnail": False,
+            "writesubtitles": False,
+            "writeautomaticsub": False,
+            "allsubtitles": False,
+            "subtitlesformat": "srt",
             "merge_output_format": "mp4",
             "final_ext": "mp4",
             "postprocessor_args": {
                 "ffmpeg": ["-c", "copy"]
-            },
-            "youtube_include_dash_manifest": True,
-            "youtube_include_hls_manifest": True,
-            "prefer_native_hls": True
+            }
         }
 
         if proxy:
@@ -255,38 +255,9 @@ def download():
         if cookie_file:
             options["cookiefile"] = cookie_file
 
-        # Set up download options with proper filename
-        if quality == "audio":
-            output_template = os.path.join(download_dir, f"%(title)s.%(ext)s")
-            options.update({
-                "outtmpl": output_template,
-                "format": "bestaudio[ext=m4a]/bestaudio/best",
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192"
-                }]
-            })
-            expected_ext = "mp3"
-        else:
-            output_template = os.path.join(download_dir, f"%(title)s.%(ext)s")
-            format_map = {
-                "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                "high": "(bestvideo[height<=720][ext=mp4]//bestvideo[height<=720])+(bestaudio[ext=m4a]/bestaudio)/best[height<=720]",
-                "medium": "(bestvideo[height<=480][ext=mp4]//bestvideo[height<=480])+(bestaudio[ext=m4a]/bestaudio)/best[height<=480]",
-                "low": "(bestvideo[height<=360][ext=mp4]//bestvideo[height<=360])+(bestaudio[ext=m4a]/bestaudio)/best[height<=360]"
-            }
-            options.update({
-                "outtmpl": output_template,
-                "format": format_map.get(quality, format_map["best"])
-            })
-            expected_ext = "mp4"
-
-        print("Starting download with options:", json.dumps(options, indent=2))
-
+        # First extract video info to get the title
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
-                # First extract video info to get the title
                 print(f"Extracting info for URL: {url}")
                 meta = None
                 last_error = None
@@ -318,8 +289,34 @@ def download():
                 video_title = re.sub(r'[<>:"/\\|?*]', '', video_title)
                 video_title = video_title.strip()[:200]
 
-                # Update output template with clean title
-                options["outtmpl"] = os.path.join(download_dir, f"{video_title}.%(ext)s")
+                # Set up download options with proper filename
+                if quality == "audio":
+                    final_filename = f"{video_title}.mp3"
+                    output_template = os.path.join(download_dir, "%(title)s.%(ext)s")
+                    options.update({
+                        "outtmpl": output_template,
+                        "format": "bestaudio[ext=m4a]/bestaudio/best",
+                        "postprocessors": [{
+                            "key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3",
+                            "preferredquality": "192"
+                        }]
+                    })
+                else:
+                    final_filename = f"{video_title}.mp4"
+                    output_template = os.path.join(download_dir, "%(title)s.%(ext)s")
+                    format_map = {
+                        "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                        "high": "(bestvideo[height<=720][ext=mp4]//bestvideo[height<=720])+(bestaudio[ext=m4a]/bestaudio)/best[height<=720]",
+                        "medium": "(bestvideo[height<=480][ext=mp4]//bestvideo[height<=480])+(bestaudio[ext=m4a]/bestaudio)/best[height<=480]",
+                        "low": "(bestvideo[height<=360][ext=mp4]//bestvideo[height<=360])+(bestaudio[ext=m4a]/bestaudio)/best[height<=360]"
+                    }
+                    options.update({
+                        "outtmpl": output_template,
+                        "format": format_map.get(quality, format_map["best"])
+                    })
+
+                print("Starting download with options:", json.dumps(options, indent=2))
 
                 # Download with retry logic
                 max_retries = 3
@@ -340,70 +337,53 @@ def download():
                             ydl = yt_dlp.YoutubeDL(options)
 
                 # Look for the downloaded file
-                expected_filename = f"{video_title}.{expected_ext}"
-                filepath = os.path.join(download_dir, expected_filename)
-                
-                if os.path.exists(filepath):
-                    print(f"File downloaded successfully: {filepath}")
-                    response = send_file(
-                        filepath,
-                        as_attachment=True,
-                        download_name=expected_filename,
-                        mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
-                    )
-                    
-                    # Clean up files after sending
-                    @response.call_on_close
-                    def cleanup():
-                        try:
-                            if os.path.exists(filepath):
-                                os.remove(filepath)
-                            if os.path.exists(download_dir):
-                                os.rmdir(download_dir)
-                            if cookie_file and os.path.exists(cookie_file):
-                                os.remove(cookie_file)
-                        except Exception as e:
-                            print(f"Cleanup error: {e}")
-                    
-                    return response
-                
-                # Fallback: look for any downloaded file
-                files = os.listdir(download_dir)
-                if files:
-                    actual_file = files[0]
-                    actual_filepath = os.path.join(download_dir, actual_file)
-                    print(f"Using fallback file: {actual_filepath}")
-                    
-                    response = send_file(
-                        actual_filepath,
-                        as_attachment=True,
-                        download_name=actual_file,
-                        mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
-                    )
-                    
-                    # Clean up files after sending
-                    @response.call_on_close
-                    def cleanup():
-                        try:
-                            if os.path.exists(actual_filepath):
-                                os.remove(actual_filepath)
-                            if os.path.exists(download_dir):
-                                os.rmdir(download_dir)
-                            if cookie_file and os.path.exists(cookie_file):
-                                os.remove(cookie_file)
-                        except Exception as e:
-                            print(f"Cleanup error: {e}")
-                    
-                    return response
+                downloaded_files = os.listdir(download_dir)
+                if not downloaded_files:
+                    raise Exception("No files were downloaded")
 
-                raise Exception("No file found after download")
+                # Get the actual downloaded file
+                actual_file = downloaded_files[0]
+                actual_filepath = os.path.join(download_dir, actual_file)
+
+                if not os.path.exists(actual_filepath):
+                    raise Exception("Downloaded file not found")
+
+                print(f"File downloaded successfully: {actual_filepath}")
+                
+                # Send the file with proper filename and mime type
+                mimetype = 'audio/mpeg' if quality == "audio" else 'video/mp4'
+                response = send_file(
+                    actual_filepath,
+                    as_attachment=True,
+                    download_name=final_filename,
+                    mimetype=mimetype
+                )
+                
+                # Clean up files after sending
+                @response.call_on_close
+                def cleanup():
+                    try:
+                        if os.path.exists(actual_filepath):
+                            os.remove(actual_filepath)
+                        if os.path.exists(download_dir):
+                            os.rmdir(download_dir)
+                        if cookie_file and os.path.exists(cookie_file):
+                            os.remove(cookie_file)
+                    except Exception as e:
+                        print(f"Cleanup error: {e}")
+                
+                return response
 
             except Exception as e:
-                if cookie_file and os.path.exists(cookie_file):
-                    try:
+                # Clean up on error
+                try:
+                    if cookie_file and os.path.exists(cookie_file):
                         os.remove(cookie_file)
-                    except:
-                        pass
+                    if os.path.exists(download_dir):
+                        import shutil
+                        shutil.rmtree(download_dir)
+                except:
+                    pass
                     
                 error_msg = str(e)
                 if "Sign in to confirm you're not a bot" in error_msg:
