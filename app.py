@@ -384,21 +384,114 @@ def generate_session_token():
     """Generate a random session token"""
     return ''.join(random.choices(string.ascii_letters + string.digits, k=32))
 
-def get_video_info(video_id):
+def get_video_info(url):
     try:
-        url = f"https://www.youtube.com/watch?v={video_id}"
+        # Extract video ID
+        video_id = None
+        if 'youtu.be' in url:
+            video_id = url.split('/')[-1].split('?')[0]
+        else:
+            parsed_url = urlparse(url)
+            video_id = parse_qs(parsed_url.query).get('v', [None])[0]
+            if not video_id:
+                video_id = parsed_url.path.split('/')[-1].split('?')[0]
+
+        if not video_id:
+            print(f"Could not extract video ID from URL: {url}")
+            raise Exception("Could not extract video ID")
+
+        print(f"Extracted video ID: {video_id}")
+
+        # Generate session data
+        session_token = generate_session_token()
+        timestamp = int(time.time())
+
+        # Create headers for YouTube API request
+        headers = {
+            'User-Agent': 'com.google.android.youtube/17.31.35 (Linux; U; Android 11)',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip',
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': INNERTUBE_API_KEY,
+            'X-YouTube-Client-Name': '3',
+            'X-YouTube-Client-Version': '17.31.35',
+            'Origin': 'https://www.youtube.com',
+            'Referer': f'https://www.youtube.com/watch?v={video_id}'
+        }
+
+        # Create request body
+        request_body = {
+            'context': {
+                'client': {
+                    'clientName': 'ANDROID',
+                    'clientVersion': '17.31.35',
+                    'androidSdkVersion': 30,
+                    'osName': 'Android',
+                    'osVersion': '11',
+                    'platform': 'MOBILE',
+                    'clientFormFactor': 'SMALL_FORM_FACTOR',
+                    'timeZone': 'UTC',
+                    'browserName': 'Chrome Mobile',
+                    'browserVersion': '117.0.0.0',
+                    'acceptHeader': '*/*'
+                },
+                'user': {
+                    'lockedSafetyMode': False
+                },
+                'request': {
+                    'useSsl': True,
+                    'internalExperimentFlags': [],
+                    'consistencyTokenJars': []
+                }
+            },
+            'videoId': video_id,
+            'playbackContext': {
+                'contentPlaybackContext': {
+                    'html5Preference': 'HTML5_PREF_WANTS',
+                    'lactMilliseconds': str(timestamp),
+                    'referer': f'https://www.youtube.com/watch?v={video_id}',
+                    'signatureTimestamp': '19369',
+                    'autonavState': 'STATE_ON',
+                    'autoCaptionsDefaultOn': False
+                }
+            },
+            'racyCheckOk': True,
+            'contentCheckOk': True
+        }
+
+        # Make request to YouTube API
+        response = requests.post(
+            f'https://youtubei.googleapis.com/youtubei/v1/player?key={INNERTUBE_API_KEY}',
+            headers=headers,
+            json=request_body,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"YouTube API request failed with status {response.status_code}")
+
+        data = response.json()
         
+        # Configure yt-dlp options with the obtained data
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': True
+            'extract_flat': True,
+            'nocheckcertificate': True,
+            'http_headers': headers
         }
-        
+
+        # Add YouTube API data to yt-dlp options
+        if 'streamingData' in data:
+            ydl_opts['player_response'] = data
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             return ydl.extract_info(url, download=False)
+
     except Exception as e:
-        print(f"Error getting video info: {str(e)}")
-        return None
+        print(f"Error in get_video_info: {str(e)}")
+        raise
 
 @app.route('/api/v1/init', methods=['GET'])
 def init_download():
@@ -547,7 +640,7 @@ def download_file(download_id):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', recaptcha_site_key=RECAPTCHA_SITE_KEY)
 
 # Cleanup task
 @app.before_request
