@@ -82,30 +82,17 @@ def get_browser_like_headers():
     
     return {
         'User-Agent': user_agent,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
-        'sec-ch-ua': f'"Chromium";v="{chrome_version}", "Google Chrome";v="{chrome_version}", "Not(A:Brand";v="24"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-ch-ua-platform-version': '"15.0.0"',
-        'Sec-CH-UA-Arch': '"x86"',
-        'Sec-CH-UA-Full-Version': chrome_version,
-        'Sec-CH-UA-Full-Version-List': f'"Chromium";v="{chrome_version}", "Google Chrome";v="{chrome_version}", "Not(A:Brand";v="24.0.0.0"',
-        'DNT': '1',
-        'Pragma': 'no-cache',
-        'Priority': 'u=0, i',
+        'Accept-Encoding': 'gzip, deflate',
         'Origin': 'https://www.youtube.com',
         'Referer': 'https://www.youtube.com/',
+        'Content-Type': 'application/json',
         'X-YouTube-Client-Name': '1',
-        'X-YouTube-Client-Version': '2.20240321.04.00'
+        'X-YouTube-Client-Version': '2.20240321.04.00',
+        'X-Goog-Visitor-Id': f"CgtVek{random.randint(100000, 999999)}",
+        'X-Origin': 'https://www.youtube.com',
+        'Cookie': f'CONSENT={YOUTUBE_CONSENT}; VISITOR_INFO1_LIVE={random.randint(10**10, (10**11)-1)}; YSC={random.randint(10**10, (10**11)-1)}',
     }
 
 def verify_recaptcha(response):
@@ -193,125 +180,123 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Basic options for initial info extraction
-        info_options = {
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": True,
-            "http_headers": get_browser_like_headers()
+        # Configure yt-dlp options
+        ydl_opts = {
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
+            'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
+            'http_headers': get_browser_like_headers(),
+            'quiet': False,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android'],
+                    'player_skip': ['webpage', 'config'],
+                }
+            },
+            'extractor_retries': 3,
+            'file_access_retries': 3,
+            'fragment_retries': 3,
+            'skip_download': False,
+            'overwrites': True,
+            'ignoreerrors': False,
+            'logtostderr': True,
+            'prefer_insecure': True,
+            'cachedir': False
         }
 
-        # First get video info
-        with yt_dlp.YoutubeDL(info_options) as ydl:
-            try:
-                print(f"Extracting info for URL: {url}")
-                meta = ydl.extract_info(url, download=False)
-                if not meta:
-                    raise Exception("Could not extract video metadata")
+        # Add format-specific options
+        if quality == "audio":
+            ydl_opts.update({
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'format': 'bestaudio/best',
+            })
+        else:
+            quality_formats = {
+                'best': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'high': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]',
+                'medium': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]',
+                'low': 'bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]'
+            }
+            ydl_opts.update({
+                'format': quality_formats.get(quality, 'best'),
+                'merge_output_format': 'mp4'
+            })
 
-                # Get and clean video title
-                video_title = meta.get('title', '')
-                if not video_title:
-                    video_title = f"youtube_video_{int(time.time())}"
-                video_title = re.sub(r'[<>:"/\\|?*]', '', video_title)
-                video_title = video_title.strip()[:200]
+        # Download the video
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            print(f"Starting download with options: {ydl_opts}")
+            info = ydl.extract_info(url, download=True)
+            if not info:
+                raise Exception("Failed to extract video information")
 
-                # Set up download options based on quality
-                if quality == "audio":
-                    output_file = os.path.join(download_dir, f"{video_title}.mp3")
-                    download_options = {
-                        "format": "bestaudio/best",
-                        "outtmpl": output_file,
-                        "postprocessors": [{
-                            "key": "FFmpegExtractAudio",
-                            "preferredcodec": "mp3",
-                            "preferredquality": "192",
-                        }],
-                        "http_headers": get_browser_like_headers(),
-                        "quiet": False
-                    }
+            # Get the output file path
+            video_title = info.get('title', f'video_{int(time.time())}')
+            video_title = re.sub(r'[<>:"/\\|?*]', '', video_title).strip()[:200]
+            ext = 'mp3' if quality == "audio" else 'mp4'
+            output_file = os.path.join(download_dir, f"{video_title}.{ext}")
+
+            # Verify the file exists and has content
+            if not os.path.exists(output_file):
+                # Try to find any file in the directory
+                files = os.listdir(download_dir)
+                if files:
+                    output_file = os.path.join(download_dir, files[0])
                 else:
-                    output_file = os.path.join(download_dir, f"{video_title}.mp4")
-                    format_str = {
-                        "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
-                        "high": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]",
-                        "medium": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]",
-                        "low": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]"
-                    }.get(quality, "best")
-
-                    download_options = {
-                        "format": format_str,
-                        "outtmpl": output_file,
-                        "http_headers": get_browser_like_headers(),
-                        "merge_output_format": "mp4",
-                        "quiet": False
-                    }
-
-                # Perform the download
-                with yt_dlp.YoutubeDL(download_options) as downloader:
-                    print(f"Starting download with options: {download_options}")
-                    downloader.download([url])
-
-                # Verify the downloaded file
-                if not os.path.exists(output_file):
                     raise Exception("Download failed - file not found")
 
-                file_size = os.path.getsize(output_file)
-                if file_size == 0:
-                    raise Exception("Download failed - empty file")
+            if os.path.getsize(output_file) == 0:
+                raise Exception("Download failed - empty file")
 
-                print(f"File downloaded successfully: {output_file} ({file_size} bytes)")
+            print(f"File downloaded successfully: {output_file}")
 
-                # Send the file
-                try:
-                    response = send_file(
-                        output_file,
-                        as_attachment=True,
-                        download_name=os.path.basename(output_file),
-                        mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
-                    )
+            # Send the file
+            try:
+                response = send_file(
+                    output_file,
+                    as_attachment=True,
+                    download_name=os.path.basename(output_file),
+                    mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
+                )
 
-                    # Clean up after sending
-                    @response.call_on_close
-                    def cleanup():
-                        try:
-                            if os.path.exists(output_file):
-                                os.remove(output_file)
-                            if os.path.exists(download_dir):
-                                os.rmdir(download_dir)
-                        except Exception as e:
-                            print(f"Cleanup error: {e}")
+                # Clean up after sending
+                @response.call_on_close
+                def cleanup():
+                    try:
+                        if os.path.exists(output_file):
+                            os.remove(output_file)
+                        if os.path.exists(download_dir):
+                            os.rmdir(download_dir)
+                    except Exception as e:
+                        print(f"Cleanup error: {e}")
 
-                    return response
-
-                except Exception as e:
-                    print(f"Error sending file: {e}")
-                    raise
+                return response
 
             except Exception as e:
-                error_msg = str(e)
-                if "Sign in to confirm you're not a bot" in error_msg:
-                    error_msg = "YouTube is detecting automated access. Please try again in a few minutes."
-                print(f"Download error: {error_msg}")
-                
-                # Clean up on error
-                try:
-                    if os.path.exists(download_dir):
-                        import shutil
-                        shutil.rmtree(download_dir)
-                except:
-                    pass
-                
-                return jsonify({
-                    "error": error_msg,
-                    "details": "Try a different video or quality setting"
-                })
+                print(f"Error sending file: {e}")
+                raise
 
     except Exception as e:
-        print(f"General error: {str(e)}")
+        error_msg = str(e)
+        if "Sign in to confirm you're not a bot" in error_msg:
+            error_msg = "YouTube is detecting automated access. Please try again with a different video or quality setting."
+        print(f"Download error: {error_msg}")
+        
+        # Clean up on error
+        try:
+            if os.path.exists(download_dir):
+                import shutil
+                shutil.rmtree(download_dir)
+        except:
+            pass
+        
         return jsonify({
-            "error": str(e),
-            "details": "An unexpected error occurred"
+            "error": error_msg,
+            "details": "Try a different video or quality setting"
         })
 
 @app.route("/get_file/<filename>")
