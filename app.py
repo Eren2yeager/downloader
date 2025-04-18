@@ -71,22 +71,38 @@ def download():
                 "Sec-Fetch-Mode": "navigate"
             },
             "nocheckcertificate": True,
-            "extract_flat": "in_playlist",
             "extractor_retries": 3,
             "file_access_retries": 3,
             "fragment_retries": 3,
             "skip_download": False,
             "rm_cachedir": True,
-            "legacy_server_connect": True,
-            "no_check_certificates": True
+            "no_check_certificates": True,
+            "prefer_insecure": True,
+            "geo_bypass": True,
+            "geo_bypass_country": "US",
+            "socket_timeout": 30,
+            "retries": 10,
+            "force_generic_extractor": False,
+            "concurrent_fragment_downloads": 1
         }
 
         if quality == "audio":
+            options["format"] = "bestaudio"
             options["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192"
             }]
+        else:
+            # Simplified format selection for video
+            if quality == "low":
+                options["format"] = "worst[ext=mp4][height>=360]"
+            elif quality == "medium":
+                options["format"] = "best[height<=480][ext=mp4]"
+            elif quality == "high":
+                options["format"] = "best[height<=720][ext=mp4]"
+            else:  # best
+                options["format"] = "best[ext=mp4]/best"
 
         print(f"Starting download with options: {options}")
 
