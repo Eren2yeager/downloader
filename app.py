@@ -7,12 +7,13 @@ import random
 import re
 import requests
 import time
+import json
 from datetime import datetime, timedelta
 from http.cookiejar import MozillaCookieJar
 
 app = Flask(__name__)
 
-# YouTube consent cookie (helps bypass some restrictions)
+# YouTube consent cookie
 YOUTUBE_CONSENT = 'YES+cb.20240318-17-p0.en-GB+FX+{}'.format(random.randint(100, 999))
 
 # reCAPTCHA settings
@@ -20,31 +21,32 @@ RECAPTCHA_SITE_KEY = os.environ.get('RECAPTCHA_SITE_KEY')
 RECAPTCHA_SECRET_KEY = os.environ.get('RECAPTCHA_SECRET_KEY')
 RECAPTCHA_VERIFY_URL = "https://www.google.com/recaptcha/api/siteverify"
 
-if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
-    print("Warning: reCAPTCHA keys not set. Please set RECAPTCHA_SITE_KEY and RECAPTCHA_SECRET_KEY environment variables.")
-    if os.environ.get('FLASK_ENV') == 'development':
-        RECAPTCHA_SITE_KEY = "YOUR_SITE_KEY"
-        RECAPTCHA_SECRET_KEY = "YOUR_SECRET_KEY"
+# List of free SOCKS5 proxies (update these regularly)
+PROXY_LIST = [
+    'socks5://51.79.51.246:443',
+    'socks5://192.111.137.35:4145',
+    'socks5://72.206.181.97:64943',
+    'socks5://192.111.139.163:19404',
+    'socks5://47.243.95.228:10080'
+]
 
-# Configure download folder
-if os.environ.get('FLASK_ENV') == 'production':
-    DOWNLOAD_FOLDER = '/tmp/downloads'
-else:
-    if platform.system() == 'Windows':
-        DOWNLOAD_FOLDER = os.path.join(os.environ.get('USERPROFILE', ''), 'Downloads')
-    else:
-        DOWNLOAD_FOLDER = os.path.join(os.path.expanduser('~'), 'Downloads')
-
-try:
-    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-except Exception as e:
-    print(f"Error setting up download folder: {e}")
-    DOWNLOAD_FOLDER = tempfile.mkdtemp()
+def get_working_proxy():
+    """Test and return a working proxy"""
+    for proxy in PROXY_LIST:
+        try:
+            response = requests.get('https://www.youtube.com', 
+                                  proxies={'http': proxy, 'https': proxy},
+                                  timeout=10)
+            if response.status_code == 200:
+                return proxy
+        except:
+            continue
+    return None
 
 def get_random_user_agent():
     user_agents = [
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2.1 Safari/605.1.15',
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Edge/122.0.2365.66',
         'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -102,12 +104,16 @@ def create_cookie_file():
         cookies = [
             # CONSENT cookie
             f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tCONSENT\t{YOUTUBE_CONSENT}',
-            # VISITOR_INFO1_LIVE cookie (helps with player settings)
+            # VISITOR_INFO1_LIVE cookie
             f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tVISITOR_INFO1_LIVE\t{random.randint(10**10, (10**11)-1)}',
-            # GPS cookie (location data)
+            # GPS cookie
             f'.youtube.com\tTRUE\t/\tFALSE\t{current_time + 3600}\tGPS\t1',
-            # PREF cookie (user preferences)
-            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tPREF\tf6=8&hl=en&f5=30',
+            # PREF cookie
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tPREF\tf6=8&hl=en&f5=30000',
+            # Additional cookies
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tLOGIN_INFO\tdummy_token',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tSID\tdummy_sid',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\t__Secure-3PSID\tdummy_3psid'
         ]
         
         # Write each cookie on a new line
@@ -147,25 +153,33 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
+        # Get a working proxy
+        proxy = get_working_proxy()
+        if proxy:
+            print(f"Using proxy: {proxy}")
+
         # Create cookie file
         try:
             cookie_file = create_cookie_file()
             print(f"Cookie file created at: {cookie_file}")
+            # Debug: Print cookie file contents
+            with open(cookie_file, 'r', encoding='utf-8') as f:
+                print("Cookie file contents:", f.read())
         except Exception as e:
             print(f"Error creating cookie file: {e}")
             cookie_file = None
 
         # Basic options with enhanced browser-like settings
         options = {
-            "quiet": False,
+            "quiet": True,
             "no_warnings": True,
-            "extract_flat": False,
+            "extract_flat": True,
             "http_headers": get_browser_like_headers(),
             "nocheckcertificate": True,
             "prefer_insecure": True,
-            "sleep_interval": 2,
-            "max_sleep_interval": 6,
-            "sleep_interval_requests": 2,
+            "sleep_interval": 3,
+            "max_sleep_interval": 7,
+            "sleep_interval_requests": 3,
             "ignoreerrors": False,
             "no_color": True,
             "geo_bypass": True,
@@ -175,14 +189,50 @@ def download():
             "fragment_retries": 10,
             "force_generic_extractor": False,
             "concurrent_fragment_downloads": 1,
-            "noplaylist": True,  # Disable playlist downloading
-            "extract_flat": True,  # Extract metadata only first
-            "quiet": True  # Reduce output noise
+            "noplaylist": True,
+            "extractor_retries": 3,
+            "file_access_retries": 3,
+            "hls_prefer_native": True,
+            "external_downloader": None,
+            "format_sort": ["res", "ext:mp4:m4a", "codec:h264:aac", "size", "br", "asr"],
+            "allow_unplayable_formats": True,
+            "check_formats": False
         }
+
+        if proxy:
+            options["proxy"] = proxy
 
         if cookie_file:
             options["cookiefile"] = cookie_file
-            options["cookiesfrombrowser"] = None
+
+        # Set up download options with proper filename
+        if quality == "audio":
+            output_template = os.path.join(download_dir, f"%(title)s.%(ext)s")
+            options.update({
+                "outtmpl": output_template,
+                "format": "bestaudio[ext=m4a]/bestaudio/best",
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192"
+                }]
+            })
+            expected_ext = "mp3"
+        else:
+            output_template = os.path.join(download_dir, f"%(title)s.%(ext)s")
+            format_map = {
+                "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "high": "(bestvideo[height<=720][ext=mp4]//bestvideo[height<=720])+(bestaudio[ext=m4a]/bestaudio)/best[height<=720]",
+                "medium": "(bestvideo[height<=480][ext=mp4]//bestvideo[height<=480])+(bestaudio[ext=m4a]/bestaudio)/best[height<=480]",
+                "low": "(bestvideo[height<=360][ext=mp4]//bestvideo[height<=360])+(bestaudio[ext=m4a]/bestaudio)/best[height<=360]"
+            }
+            options.update({
+                "outtmpl": output_template,
+                "format": format_map.get(quality, format_map["best"])
+            })
+            expected_ext = "mp4"
+
+        print("Starting download with options:", json.dumps(options, indent=2))
 
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
@@ -199,7 +249,12 @@ def download():
                     except Exception as e:
                         last_error = e
                         print(f"Info extraction attempt {attempt + 1} failed: {str(e)}")
-                        time.sleep(3 * (attempt + 1))
+                        time.sleep(5 * (attempt + 1))
+                        # Try a different proxy on retry
+                        proxy = get_working_proxy()
+                        if proxy:
+                            options["proxy"] = proxy
+                            ydl = yt_dlp.YoutubeDL(options)
                 
                 if not meta:
                     raise last_error or Exception("Could not extract video metadata")
@@ -211,34 +266,10 @@ def download():
                 
                 # Clean the title to make it filesystem safe
                 video_title = re.sub(r'[<>:"/\\|?*]', '', video_title)
-                video_title = video_title.strip()[:200]  # Limit length
-                
-                # Set up download options with proper filename
-                if quality == "audio":
-                    output_template = os.path.join(download_dir, f"{video_title}.%(ext)s")
-                    options.update({
-                        "outtmpl": output_template,
-                        "format": "bestaudio[ext=m4a]/bestaudio/best",
-                        "postprocessors": [{
-                            "key": "FFmpegExtractAudio",
-                            "preferredcodec": "mp3",
-                            "preferredquality": "192"
-                        }]
-                    })
-                    expected_ext = "mp3"
-                else:
-                    output_template = os.path.join(download_dir, f"{video_title}.%(ext)s")
-                    format_map = {
-                        "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                        "high": "(bestvideo[height<=720][ext=mp4]//bestvideo[height<=720])+(bestaudio[ext=m4a]/bestaudio)/best[height<=720]",
-                        "medium": "(bestvideo[height<=480][ext=mp4]//bestvideo[height<=480])+(bestaudio[ext=m4a]/bestaudio)/best[height<=480]",
-                        "low": "(bestvideo[height<=360][ext=mp4]//bestvideo[height<=360])+(bestaudio[ext=m4a]/bestaudio)/best[height<=360]"
-                    }
-                    options.update({
-                        "outtmpl": output_template,
-                        "format": format_map.get(quality, format_map["best"])
-                    })
-                    expected_ext = "mp4"
+                video_title = video_title.strip()[:200]
+
+                # Update output template with clean title
+                options["outtmpl"] = os.path.join(download_dir, f"{video_title}.%(ext)s")
 
                 # Download with retry logic
                 max_retries = 3
@@ -252,6 +283,11 @@ def download():
                             raise
                         print(f"Attempt {attempt + 1} failed: {str(e)}")
                         time.sleep(5 * (attempt + 1))
+                        # Try a different proxy on retry
+                        proxy = get_working_proxy()
+                        if proxy:
+                            options["proxy"] = proxy
+                            ydl = yt_dlp.YoutubeDL(options)
 
                 # Look for the downloaded file
                 expected_filename = f"{video_title}.{expected_ext}"
