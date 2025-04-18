@@ -237,6 +237,7 @@ def get_browser_like_headers():
         'sec-ch-ua': '"Not.A/Brand";v="8", "Chromium";v="114"',
         'sec-ch-ua-mobile': '?1',
         'sec-ch-ua-platform': '"Android"',
+        'Range': 'bytes=0-',  # Add range header for resumable downloads
         'Cookie': f'CONSENT={YOUTUBE_CONSENT}; VISITOR_INFO1_LIVE={random.randint(10**10, (10**11)-1)}; YSC={random.randint(10**10, (10**11)-1)}'
     }
 
@@ -351,14 +352,14 @@ def download():
         # Add a small delay before download
         time.sleep(2)
 
-        # Configure yt-dlp options with more fallbacks
+        # Configure yt-dlp options with more fallbacks and better download handling
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
             'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
             'http_headers': get_browser_like_headers(),
             'quiet': False,
-            'verbose': True,  # Add verbose output for debugging
-            'no_warnings': False,  # Show warnings for debugging
+            'verbose': True,
+            'no_warnings': False,
             'nocheckcertificate': True,
             'extractor_args': {
                 'youtube': {
@@ -367,19 +368,27 @@ def download():
                     'client': ['android', 'mobile']
                 }
             },
-            'socket_timeout': 30,  # Increased timeout
-            'retries': 5,  # Increased retries
-            'file_access_retries': 5,
-            'fragment_retries': 5,
+            'socket_timeout': 30,
+            'retries': 10,  # Increased retries
+            'file_access_retries': 10,
+            'fragment_retries': 10,
+            'retry_sleep': 5,  # Add delay between retries
+            'max_sleep_interval': 30,  # Maximum sleep between retries
             'skip_download': False,
             'overwrites': True,
             'ignoreerrors': False,
             'logtostderr': True,
             'prefer_insecure': True,
-            'cachedir': False
+            'cachedir': False,
+            'continuedl': True,  # Enable continued downloads
+            'noresizebuffer': True,  # Disable buffer resizing
+            'buffersize': 1024 * 16,  # 16KB buffer size
+            'http_chunk_size': 1024 * 1024,  # 1MB chunks
+            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")],
+            'external_downloader_args': ['--max-connection-per-server', '16'],  # Increase connections
+            'concurrent_fragment_downloads': 5,  # Download multiple fragments at once
         }
 
-        # Add format-specific options
         if quality == "audio":
             ydl_opts.update({
                 'format': 'bestaudio/best',
@@ -401,61 +410,83 @@ def download():
                 'merge_output_format': 'mp4'
             })
 
-        # Download the video
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print(f"Starting download with options: {ydl_opts}")
-            info = ydl.extract_info(url, download=True)
-            if not info:
-                raise Exception("Failed to extract video information")
-
-            # Get the output file path
-            video_title = info.get('title', f'video_{int(time.time())}')
-            video_title = re.sub(r'[<>:"/\\|?*]', '', video_title).strip()[:200]
-            ext = 'mp3' if quality == "audio" else 'mp4'
-            output_file = os.path.join(download_dir, f"{video_title}.{ext}")
-
-            # Verify the file exists and has content
-            if not os.path.exists(output_file):
-                # Try to find any file in the directory
-                files = os.listdir(download_dir)
-                if files:
-                    output_file = os.path.join(download_dir, files[0])
-                else:
-                    raise Exception("Download failed - file not found")
-
-            if os.path.getsize(output_file) == 0:
-                raise Exception("Download failed - empty file")
-
-            print(f"File downloaded successfully: {output_file}")
-
-            # Add a small delay before sending
-            time.sleep(1)
-
-            # Send the file
+        # Download with progress tracking and resume capability
+        max_attempts = 3
+        current_attempt = 0
+        while current_attempt < max_attempts:
             try:
-                response = send_file(
-                    output_file,
-                    as_attachment=True,
-                    download_name=os.path.basename(output_file),
-                    mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
-                )
-
-                # Clean up after sending
-                @response.call_on_close
-                def cleanup():
-                    try:
-                        if os.path.exists(output_file):
-                            os.remove(output_file)
-                        if os.path.exists(download_dir):
-                            os.rmdir(download_dir)
-                    except Exception as e:
-                        print(f"Cleanup error: {e}")
-
-                return response
-
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    print(f"Download attempt {current_attempt + 1}/{max_attempts}")
+                    info = ydl.extract_info(url, download=True)
+                    if info:
+                        break
             except Exception as e:
-                print(f"Error sending file: {e}")
-                raise
+                current_attempt += 1
+                print(f"Download attempt {current_attempt} failed: {str(e)}")
+                if current_attempt < max_attempts:
+                    sleep_time = min(30, 5 * current_attempt)  # Progressive delay
+                    print(f"Waiting {sleep_time} seconds before retry...")
+                    time.sleep(sleep_time)
+                else:
+                    raise Exception("Maximum download attempts reached")
+
+        if not info:
+            raise Exception("Download failed - no video information available")
+
+        # Get the output file path
+        video_title = info.get('title', f'video_{int(time.time())}')
+        video_title = re.sub(r'[<>:"/\\|?*]', '', video_title).strip()[:200]
+        ext = 'mp3' if quality == "audio" else 'mp4'
+        output_file = os.path.join(download_dir, f"{video_title}.{ext}")
+
+        # Verify the file exists and has content
+        if not os.path.exists(output_file):
+            # Try to find any file in the directory
+            files = os.listdir(download_dir)
+            if files:
+                output_file = os.path.join(download_dir, files[0])
+            else:
+                raise Exception("Download failed - file not found")
+
+        # Verify file size
+        file_size = os.path.getsize(output_file)
+        if file_size == 0:
+            raise Exception("Download failed - empty file")
+        
+        expected_size = info.get('filesize', 0)
+        if expected_size > 0 and file_size < expected_size * 0.95:  # Allow 5% tolerance
+            raise Exception("Download incomplete - file size mismatch")
+
+        print(f"File downloaded successfully: {output_file} ({file_size} bytes)")
+
+        # Add a small delay before sending
+        time.sleep(1)
+
+        # Send the file
+        try:
+            response = send_file(
+                output_file,
+                as_attachment=True,
+                download_name=os.path.basename(output_file),
+                mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
+            )
+
+            # Clean up after sending
+            @response.call_on_close
+            def cleanup():
+                try:
+                    if os.path.exists(output_file):
+                        os.remove(output_file)
+                    if os.path.exists(download_dir):
+                        os.rmdir(download_dir)
+                except Exception as e:
+                    print(f"Cleanup error: {e}")
+
+            return response
+
+        except Exception as e:
+            print(f"Error sending file: {e}")
+            raise
 
     except Exception as e:
         error_msg = str(e)
