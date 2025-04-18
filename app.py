@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import shutil
+from fake_useragent import UserAgent
 
 app = Flask(__name__)
 
@@ -50,11 +51,14 @@ except Exception as e:
 
 # List of free SOCKS5 proxies (update these regularly)
 PROXY_LIST = [
-    'socks5://51.79.51.246:443',
-    'socks5://192.111.137.35:4145',
-    'socks5://72.206.181.97:64943',
-    'socks5://192.111.139.163:19404',
-    'socks5://47.243.95.228:10080'
+    'socks5://192.111.137.34:18765',
+    'socks5://192.111.129.145:16894',
+    'socks5://98.162.25.16:4145',
+    'socks5://72.210.221.197:4145',
+    'socks5://192.111.135.17:18302',
+    'socks5://192.111.137.37:18762',
+    'socks5://192.111.139.165:4145',
+    'socks5://192.111.130.2:4145'
 ]
 
 # YouTube API constants
@@ -74,13 +78,19 @@ INNERTUBE_CONTEXT = {
 
 def get_working_proxy():
     """Test and return a working proxy"""
+    random.shuffle(PROXY_LIST)
     for proxy in PROXY_LIST:
         try:
+            proxies = {
+                'http': proxy,
+                'https': proxy
+            }
             response = requests.get('https://www.youtube.com', 
-                                  proxies={'http': proxy, 'https': proxy},
-                                  timeout=10)
+                                 proxies=proxies,
+                                 timeout=10)
             if response.status_code == 200:
-                return proxy
+                print(f"Found working proxy: {proxy}")
+                return proxies
         except:
             continue
     return None
@@ -142,64 +152,32 @@ def create_cookie_file():
     
     return cookie_file
 
-def get_video_info(url):
+def get_video_info_with_proxy(url, proxy=None):
+    """Get video info using proxy"""
     try:
-        video_id = None
-        if 'youtu.be' in url:
-            video_id = url.split('/')[-1].split('?')[0]
-        else:
-            parsed_url = urlparse(url)
-            video_id = parse_qs(parsed_url.query).get('v', [None])[0]
-            if not video_id:
-                video_id = parsed_url.path.split('/')[-1].split('?')[0]
-        
-        if not video_id:
-            print(f"Could not extract video ID from URL: {url}")
-            raise Exception("Could not extract video ID")
-
-        print(f"Extracted video ID: {video_id}")
-
-        # Create cookie file
-        cookie_file = create_cookie_file()
-        print(f"Created cookie file: {cookie_file}")
-
-        # Basic options for info extraction
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': True,
-            'cookiefile': cookie_file,
-            'nocheckcertificate': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android'],
-                    'player_skip': [],
-                    'client': ['android']
-                }
-            }
+        ua = UserAgent()
+        headers = {
+            'User-Agent': ua.random,
+            'Accept': 'text/html,application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://www.youtube.com',
+            'Referer': 'https://www.youtube.com/'
         }
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                print("Attempting to extract video info...")
-                meta = ydl.extract_info(url, download=False)
-                if meta:
-                    print("Successfully extracted video info")
-                    return meta
-        except Exception as e:
-            print(f"Error extracting video info: {str(e)}")
-            raise
+        # Try with proxy first
+        if proxy:
+            try:
+                response = requests.get(url, headers=headers, proxies=proxy, timeout=15)
+                if response.status_code == 200:
+                    return response
+            except:
+                pass
 
+        # Try without proxy as fallback
+        return requests.get(url, headers=headers, timeout=15)
     except Exception as e:
-        print(f"Final error in get_video_info: {str(e)}")
+        print(f"Error getting video info: {str(e)}")
         raise
-    finally:
-        # Clean up cookie file
-        try:
-            if os.path.exists(cookie_file):
-                os.remove(cookie_file)
-        except:
-            pass
 
 def get_browser_like_headers():
     return {
@@ -363,41 +341,17 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Get video info first with multiple retries
-        max_retries = 3
-        retry_count = 0
-        video_info = None
-        last_error = None
+        # Get a working proxy
+        proxy = get_working_proxy()
+        if proxy:
+            print("Using proxy for download")
+        else:
+            print("No working proxy found, proceeding without proxy")
 
-        while retry_count < max_retries:
-            try:
-                print(f"Attempt {retry_count + 1} to get video info...")
-                video_info = get_video_info(url)
-                if video_info:
-                    print("Successfully got video info")
-                    break
-            except Exception as e:
-                last_error = str(e)
-                print(f"Attempt {retry_count + 1} failed: {last_error}")
-                retry_count += 1
-                if retry_count < max_retries:
-                    time.sleep(2 * retry_count)  # Exponential backoff
-                    
-        if not video_info:
-            raise Exception(f"Failed to get video information after {max_retries} attempts. Last error: {last_error}")
-
-        # Add a small delay before download
-        time.sleep(2)
-
-        # Create cookie file for download
-        cookie_file = create_cookie_file()
-        print(f"Created cookie file for download: {cookie_file}")
-
-        # Configure yt-dlp options with more sophisticated browser emulation
+        # Configure yt-dlp options
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
             'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
-            'cookiefile': cookie_file,
             'quiet': False,
             'verbose': True,
             'no_warnings': False,
@@ -414,40 +368,13 @@ def download():
             'logtostderr': True,
             'prefer_insecure': True,
             'cachedir': False,
-            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")],
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['web', 'android'],  # Try both web and android clients
-                    'player_skip': [],
-                    'client': ['web', 'android'],  # Try both web and android clients
-                    'player_params': {
-                        'playback_context': {
-                            'client': {
-                                'clientName': 'ANDROID',
-                                'clientVersion': '18.11.36',
-                                'androidSdkVersion': 33,
-                                'osName': 'Android',
-                                'osVersion': '13',
-                                'platform': 'MOBILE'
-                            }
-                        }
-                    }
-                }
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.5563.57 Mobile Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate',
-                'Origin': 'https://m.youtube.com',
-                'Referer': 'https://m.youtube.com/',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'same-origin',
-                'X-YouTube-Client-Name': '2',
-                'X-YouTube-Client-Version': '2.20240321.04.00'
-            }
+            'no_color': True,
+            'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")]
         }
+
+        # Add proxy if available
+        if proxy:
+            ydl_opts['proxy'] = proxy['https']
 
         if quality == "audio":
             ydl_opts.update({
@@ -470,17 +397,23 @@ def download():
                 'merge_output_format': 'mp4'
             })
 
-        # Try download with retries and session management
+        # Try download with retries and proxy rotation
+        max_retries = 3
         for attempt in range(max_retries):
             try:
                 print(f"Download attempt {attempt + 1}/{max_retries}")
                 
-                # Add a small delay between attempts
                 if attempt > 0:
+                    # Try a different proxy on retry
+                    proxy = get_working_proxy()
+                    if proxy:
+                        ydl_opts['proxy'] = proxy['https']
+                        print(f"Using new proxy for attempt {attempt + 1}")
+                    
                     sleep_time = min(30, 5 * (attempt + 1))
                     print(f"Waiting {sleep_time} seconds before retry...")
                     time.sleep(sleep_time)
-                
+
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     # First try to extract info without downloading
                     print("Extracting video information...")
@@ -493,12 +426,11 @@ def download():
                         if info:
                             print("Download completed successfully")
                             break
+
             except Exception as e:
                 print(f"Download attempt {attempt + 1} failed: {str(e)}")
                 if attempt < max_retries - 1:
-                    # Create a new cookie file for the next attempt
-                    cookie_file = create_cookie_file()
-                    ydl_opts['cookiefile'] = cookie_file
+                    continue
                 else:
                     raise Exception(f"Download failed after {max_retries} attempts")
 
@@ -520,19 +452,10 @@ def download():
             else:
                 raise Exception("Download failed - file not found")
 
-        # Verify file size
-        file_size = os.path.getsize(output_file)
-        if file_size == 0:
+        if os.path.getsize(output_file) == 0:
             raise Exception("Download failed - empty file")
-        
-        expected_size = info.get('filesize', 0)
-        if expected_size > 0 and file_size < expected_size * 0.95:  # Allow 5% tolerance
-            raise Exception("Download incomplete - file size mismatch")
 
-        print(f"File downloaded successfully: {output_file} ({file_size} bytes)")
-
-        # Add a small delay before sending
-        time.sleep(1)
+        print(f"File downloaded successfully: {output_file}")
 
         # Send the file
         try:
@@ -564,8 +487,6 @@ def download():
         error_msg = str(e)
         if "Sign in to confirm you're not a bot" in error_msg:
             error_msg = "YouTube is detecting automated access. Please try again with a different video or quality setting."
-        elif "not available on this app" in error_msg:
-            error_msg = "This video is not available for download. Please try a different video."
         print(f"Download error: {error_msg}")
         
         # Clean up on error
