@@ -126,7 +126,14 @@ def create_cookie_file():
             f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tVISITOR_INFO1_LIVE\t{random.randint(10**10, (10**11)-1)}',
             f'.youtube.com\tTRUE\t/\tFALSE\t{current_time + 3600}\tGPS\t1',
             f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tPREF\tf6=8&hl=en&f5=30000',
-            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tYSC\t{random.randint(10**10, (10**11)-1)}'
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tYSC\t{random.randint(10**10, (10**11)-1)}',
+            # Add SAPISID cookie for authentication
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tSAPISID\t{random.randint(10**10, (10**11)-1)}',
+            # Add additional session cookies
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\t__Secure-1PSID\t{random.randint(10**10, (10**11)-1)}',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\t__Secure-3PSID\t{random.randint(10**10, (10**11)-1)}',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tLOGIN_INFO\tAFmmF2swRQIgC{random.randint(10**10, (10**11)-1)}',
+            f'.youtube.com\tTRUE\t/\tFALSE\t{expiry}\tSID\tv{random.randint(10**10, (10**11)-1)}'
         ]
         
         # Write each cookie on a new line
@@ -386,7 +393,7 @@ def download():
         cookie_file = create_cookie_file()
         print(f"Created cookie file for download: {cookie_file}")
 
-        # Configure yt-dlp options
+        # Configure yt-dlp options with more sophisticated browser emulation
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
             'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
@@ -410,10 +417,35 @@ def download():
             'progress_hooks': [lambda d: print(f"Download progress: {d.get('downloaded_bytes', 0)}/{d.get('total_bytes', 0)} bytes")],
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android'],
+                    'player_client': ['web', 'android'],  # Try both web and android clients
                     'player_skip': [],
-                    'client': ['android']
+                    'client': ['web', 'android'],  # Try both web and android clients
+                    'player_params': {
+                        'playback_context': {
+                            'client': {
+                                'clientName': 'ANDROID',
+                                'clientVersion': '18.11.36',
+                                'androidSdkVersion': 33,
+                                'osName': 'Android',
+                                'osVersion': '13',
+                                'platform': 'MOBILE'
+                            }
+                        }
+                    }
                 }
+            },
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.5563.57 Mobile Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate',
+                'Origin': 'https://m.youtube.com',
+                'Referer': 'https://m.youtube.com/',
+                'Sec-Fetch-Dest': 'empty',
+                'Sec-Fetch-Mode': 'cors',
+                'Sec-Fetch-Site': 'same-origin',
+                'X-YouTube-Client-Name': '2',
+                'X-YouTube-Client-Version': '2.20240321.04.00'
             }
         }
 
@@ -438,20 +470,35 @@ def download():
                 'merge_output_format': 'mp4'
             })
 
-        # Try download with retries
+        # Try download with retries and session management
         for attempt in range(max_retries):
             try:
                 print(f"Download attempt {attempt + 1}/{max_retries}")
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=True)
-                    if info:
-                        break
-            except Exception as e:
-                print(f"Download attempt {attempt + 1} failed: {str(e)}")
-                if attempt < max_retries - 1:
+                
+                # Add a small delay between attempts
+                if attempt > 0:
                     sleep_time = min(30, 5 * (attempt + 1))
                     print(f"Waiting {sleep_time} seconds before retry...")
                     time.sleep(sleep_time)
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    # First try to extract info without downloading
+                    print("Extracting video information...")
+                    info = ydl.extract_info(url, download=False)
+                    
+                    if info:
+                        print("Successfully extracted video info, starting download...")
+                        # Now try the actual download
+                        info = ydl.extract_info(url, download=True)
+                        if info:
+                            print("Download completed successfully")
+                            break
+            except Exception as e:
+                print(f"Download attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    # Create a new cookie file for the next attempt
+                    cookie_file = create_cookie_file()
+                    ydl_opts['cookiefile'] = cookie_file
                 else:
                     raise Exception(f"Download failed after {max_retries} attempts")
 
