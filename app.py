@@ -110,54 +110,117 @@ def get_video_info(url):
     try:
         video_id = None
         if 'youtu.be' in url:
-            video_id = url.split('/')[-1]
+            video_id = url.split('/')[-1].split('?')[0]
         else:
             parsed_url = urlparse(url)
             video_id = parse_qs(parsed_url.query).get('v', [None])[0]
             if not video_id:
-                video_id = parsed_url.path.split('/')[-1]
+                video_id = parsed_url.path.split('/')[-1].split('?')[0]
         
         if not video_id:
+            print(f"Could not extract video ID from URL: {url}")
             raise Exception("Could not extract video ID")
 
-        session = create_session()
-        
-        # First, get the initial page data
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.5563.57 Mobile Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Origin': 'https://m.youtube.com',
-            'Referer': 'https://m.youtube.com/',
-        }
-        
-        # Get video info using InnerTube API
-        data = {
-            'videoId': video_id,
-            'context': INNERTUBE_CONTEXT,
-            'playbackContext': {
-                'contentPlaybackContext': {
-                    'html5Preference': 'HTML5_PREF_WANTS',
+        print(f"Extracted video ID: {video_id}")
+
+        # Try multiple approaches to get video info
+        try:
+            # First attempt: Use yt-dlp to extract info
+            ydl_opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': True,
+                'http_headers': get_browser_like_headers()
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                print("Attempting to extract video info using yt-dlp...")
+                meta = ydl.extract_info(url, download=False)
+                if meta:
+                    print("Successfully extracted video info using yt-dlp")
+                    return meta
+
+        except Exception as e:
+            print(f"yt-dlp info extraction failed: {str(e)}")
+            
+            try:
+                # Second attempt: Use YouTube API
+                session = create_session()
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.5563.57 Mobile Safari/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Origin': 'https://m.youtube.com',
+                    'Referer': 'https://m.youtube.com/',
+                    'Content-Type': 'application/json'
                 }
-            },
-            'racyCheckOk': True,
-            'contentCheckOk': True
-        }
-        
-        response = session.post(
-            'https://www.youtube.com/youtubei/v1/player',
-            params={'key': INNERTUBE_API_KEY},
-            headers={
-                **headers,
-                'Content-Type': 'application/json',
-            },
-            json=data
-        )
-        
-        response.raise_for_status()
-        return response.json()
+                
+                data = {
+                    'videoId': video_id,
+                    'context': {
+                        'client': {
+                            'clientName': 'ANDROID',
+                            'clientVersion': '18.11.36',
+                            'androidSdkVersion': 33,
+                            'osName': 'Android',
+                            'osVersion': '13',
+                            'platform': 'MOBILE'
+                        }
+                    },
+                    'playbackContext': {
+                        'contentPlaybackContext': {
+                            'html5Preference': 'HTML5_PREF_WANTS'
+                        }
+                    }
+                }
+                
+                print("Attempting to get video info using YouTube API...")
+                response = session.post(
+                    'https://www.youtube.com/youtubei/v1/player',
+                    params={'key': INNERTUBE_API_KEY},
+                    headers=headers,
+                    json=data
+                )
+                
+                response.raise_for_status()
+                api_data = response.json()
+                
+                if api_data:
+                    print("Successfully got video info using YouTube API")
+                    return api_data
+
+            except Exception as api_error:
+                print(f"YouTube API request failed: {str(api_error)}")
+                
+                try:
+                    # Third attempt: Try with a different user agent
+                    print("Attempting with different user agent...")
+                    ydl_opts = {
+                        'quiet': True,
+                        'no_warnings': True,
+                        'extract_flat': True,
+                        'http_headers': {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                            'Accept': '*/*',
+                            'Accept-Language': 'en-US,en;q=0.9',
+                            'Origin': 'https://www.youtube.com',
+                            'Referer': 'https://www.youtube.com/'
+                        }
+                    }
+                    
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        meta = ydl.extract_info(url, download=False)
+                        if meta:
+                            print("Successfully extracted video info using alternative user agent")
+                            return meta
+                            
+                except Exception as alt_error:
+                    print(f"Alternative user agent attempt failed: {str(alt_error)}")
+                    raise Exception("All attempts to get video information failed")
+
+        raise Exception("Could not get video information")
     
     except Exception as e:
-        print(f"Error getting video info: {str(e)}")
+        print(f"Final error in get_video_info: {str(e)}")
         raise
 
 def get_browser_like_headers():
@@ -262,43 +325,52 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Get video info first
-        try:
-            video_info = get_video_info(url)
-            if not video_info:
-                raise Exception("Could not get video information")
-            
-            # Add a small delay
-            time.sleep(2)
-            
-        except Exception as e:
-            print(f"Error getting video info: {e}")
-            raise Exception("Failed to get video information. Please try again.")
+        # Get video info first with multiple retries
+        max_retries = 3
+        retry_count = 0
+        video_info = None
+        last_error = None
 
-        # Configure yt-dlp options
+        while retry_count < max_retries:
+            try:
+                print(f"Attempt {retry_count + 1} to get video info...")
+                video_info = get_video_info(url)
+                if video_info:
+                    print("Successfully got video info")
+                    break
+            except Exception as e:
+                last_error = str(e)
+                print(f"Attempt {retry_count + 1} failed: {last_error}")
+                retry_count += 1
+                if retry_count < max_retries:
+                    time.sleep(2 * retry_count)  # Exponential backoff
+                    
+        if not video_info:
+            raise Exception(f"Failed to get video information after {max_retries} attempts. Last error: {last_error}")
+
+        # Add a small delay before download
+        time.sleep(2)
+
+        # Configure yt-dlp options with more fallbacks
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best' if quality != "audio" else 'bestaudio[ext=m4a]/best',
             'outtmpl': os.path.join(download_dir, '%(title)s.%(ext)s'),
             'http_headers': get_browser_like_headers(),
             'quiet': False,
-            'no_warnings': True,
+            'verbose': True,  # Add verbose output for debugging
+            'no_warnings': False,  # Show warnings for debugging
             'nocheckcertificate': True,
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'mobile'],
                     'player_skip': [],
-                    'client': ['android', 'mobile'],
-                    'player_params': {
-                        'playback_context': {
-                            'client': INNERTUBE_CONTEXT['client']
-                        }
-                    }
+                    'client': ['android', 'mobile']
                 }
             },
-            'socket_timeout': 15,
-            'retries': 3,
-            'file_access_retries': 3,
-            'fragment_retries': 3,
+            'socket_timeout': 30,  # Increased timeout
+            'retries': 5,  # Increased retries
+            'file_access_retries': 5,
+            'fragment_retries': 5,
             'skip_download': False,
             'overwrites': True,
             'ignoreerrors': False,
@@ -328,9 +400,6 @@ def download():
                 'format': quality_formats.get(quality, 'best'),
                 'merge_output_format': 'mp4'
             })
-
-        # Add a small delay before download
-        time.sleep(2)
 
         # Download the video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
