@@ -5,7 +5,8 @@ FROM python:3.10-slim-bookworm
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    FLASK_ENV=production
+    FLASK_ENV=production \
+    PATH="/home/appuser/.local/bin:${PATH}"
 
 # Install system dependencies and cleanup in the same layer
 RUN apt-get update && \
@@ -13,34 +14,47 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
     ca-certificates \
-    openssl && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
-    update-ca-certificates
+    openssl \
+    curl \
+    gnupg \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
+
+# Create non-root user
+RUN useradd -m -r -u 1001 appuser && \
+    mkdir -p /app /app/downloads /app/temp && \
+    chown -R appuser:appuser /app
 
 # Set working directory
 WORKDIR /app
 
-# Create downloads directory with proper permissions
-RUN mkdir -p /app/downloads && chmod 755 /app/downloads
-
-# Copy requirements first to leverage Docker cache
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of the application
-COPY . .
-
-# Set proper permissions and create non-root user
-RUN useradd -r -u 1001 appuser && \
-    chown -R appuser:appuser /app && \
-    chmod -R 755 /app
-
+# Switch to non-root user
 USER appuser
 
-EXPOSE 5000
+# Copy requirements first to leverage Docker cache
+COPY --chown=appuser:appuser requirements.txt .
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+# Install Python dependencies
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Copy the application with proper ownership
+COPY --chown=appuser:appuser . .
+
+# Set proper permissions
+RUN chmod -R 755 /app
+
+# Create required directories with proper permissions
+RUN mkdir -p /app/downloads /app/temp && \
+    chmod 755 /app/downloads /app/temp
+
+# Expose port
+EXPOSE 8080
+
+# Set healthcheck
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/ || exit 1
+
+# Use gunicorn with proper configuration
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "4", "--threads", "2", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "--capture-output", "app:app"]
 
