@@ -193,202 +193,115 @@ def download():
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Download directory: {download_dir}")
 
-        # Get a working proxy
-        proxy = get_working_proxy()
-        if proxy:
-            print(f"Using proxy: {proxy}")
-
-        # Create cookie file
-        try:
-            cookie_file = create_cookie_file()
-            print(f"Cookie file created at: {cookie_file}")
-        except Exception as e:
-            print(f"Error creating cookie file: {e}")
-            cookie_file = None
-
-        # Basic options with enhanced browser-like settings
-        options = {
+        # Basic options for initial info extraction
+        info_options = {
             "quiet": True,
             "no_warnings": True,
-            "http_headers": get_browser_like_headers(),
-            "nocheckcertificate": True,
-            "prefer_insecure": True,
-            "sleep_interval": 3,
-            "max_sleep_interval": 7,
-            "sleep_interval_requests": 3,
-            "ignoreerrors": False,
-            "no_color": True,
-            "geo_bypass": True,
-            "geo_bypass_country": "US",
-            "socket_timeout": 30,
-            "retries": 5,
-            "fragment_retries": 10,
-            "force_generic_extractor": False,
-            "concurrent_fragment_downloads": 1,
-            "noplaylist": True,
-            "extract_flat": False,
-            "extractor_retries": 3,
-            "file_access_retries": 3,
-            "hls_prefer_native": True,
-            "external_downloader": None,
-            "format_sort": ["res", "ext:mp4:m4a", "codec:h264:aac", "size", "br", "asr"],
-            "allow_unplayable_formats": True,
-            "check_formats": False,
-            "youtube_include_dash_manifest": True,
-            "youtube_include_hls_manifest": True,
-            "prefer_native_hls": True,
-            "writethumbnail": False,
-            "writesubtitles": False,
-            "writeautomaticsub": False,
-            "allsubtitles": False,
-            "subtitlesformat": "srt",
-            "merge_output_format": "mp4",
-            "final_ext": "mp4",
-            "postprocessor_args": {
-                "ffmpeg": ["-c", "copy"]
-            }
+            "extract_flat": True,
+            "http_headers": get_browser_like_headers()
         }
 
-        if proxy:
-            options["proxy"] = proxy
-
-        if cookie_file:
-            options["cookiefile"] = cookie_file
-
-        # First extract video info to get the title
-        with yt_dlp.YoutubeDL(options) as ydl:
+        # First get video info
+        with yt_dlp.YoutubeDL(info_options) as ydl:
             try:
                 print(f"Extracting info for URL: {url}")
-                meta = None
-                last_error = None
-                
-                for attempt in range(3):
-                    try:
-                        meta = ydl.extract_info(url, download=False)
-                        if meta:
-                            break
-                    except Exception as e:
-                        last_error = e
-                        print(f"Info extraction attempt {attempt + 1} failed: {str(e)}")
-                        time.sleep(5 * (attempt + 1))
-                        # Try a different proxy on retry
-                        proxy = get_working_proxy()
-                        if proxy:
-                            options["proxy"] = proxy
-                            ydl = yt_dlp.YoutubeDL(options)
-                
+                meta = ydl.extract_info(url, download=False)
                 if not meta:
-                    raise last_error or Exception("Could not extract video metadata")
+                    raise Exception("Could not extract video metadata")
 
-                # Clean and prepare the filename
+                # Get and clean video title
                 video_title = meta.get('title', '')
                 if not video_title:
                     video_title = f"youtube_video_{int(time.time())}"
-                
-                # Clean the title to make it filesystem safe
                 video_title = re.sub(r'[<>:"/\\|?*]', '', video_title)
                 video_title = video_title.strip()[:200]
 
-                # Set up download options with proper filename
+                # Set up download options based on quality
                 if quality == "audio":
-                    final_filename = f"{video_title}.mp3"
-                    output_template = os.path.join(download_dir, "%(title)s.%(ext)s")
-                    options.update({
-                        "outtmpl": output_template,
-                        "format": "bestaudio[ext=m4a]/bestaudio/best",
+                    output_file = os.path.join(download_dir, f"{video_title}.mp3")
+                    download_options = {
+                        "format": "bestaudio/best",
+                        "outtmpl": output_file,
                         "postprocessors": [{
                             "key": "FFmpegExtractAudio",
                             "preferredcodec": "mp3",
-                            "preferredquality": "192"
-                        }]
-                    })
-                else:
-                    final_filename = f"{video_title}.mp4"
-                    output_template = os.path.join(download_dir, "%(title)s.%(ext)s")
-                    format_map = {
-                        "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                        "high": "(bestvideo[height<=720][ext=mp4]//bestvideo[height<=720])+(bestaudio[ext=m4a]/bestaudio)/best[height<=720]",
-                        "medium": "(bestvideo[height<=480][ext=mp4]//bestvideo[height<=480])+(bestaudio[ext=m4a]/bestaudio)/best[height<=480]",
-                        "low": "(bestvideo[height<=360][ext=mp4]//bestvideo[height<=360])+(bestaudio[ext=m4a]/bestaudio)/best[height<=360]"
+                            "preferredquality": "192",
+                        }],
+                        "http_headers": get_browser_like_headers(),
+                        "quiet": False
                     }
-                    options.update({
-                        "outtmpl": output_template,
-                        "format": format_map.get(quality, format_map["best"])
-                    })
+                else:
+                    output_file = os.path.join(download_dir, f"{video_title}.mp4")
+                    format_str = {
+                        "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
+                        "high": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]",
+                        "medium": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]",
+                        "low": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]"
+                    }.get(quality, "best")
 
-                print("Starting download with options:", json.dumps(options, indent=2))
+                    download_options = {
+                        "format": format_str,
+                        "outtmpl": output_file,
+                        "http_headers": get_browser_like_headers(),
+                        "merge_output_format": "mp4",
+                        "quiet": False
+                    }
 
-                # Download with retry logic
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        print(f"Download attempt {attempt + 1}/{max_retries}")
-                        ydl.download([url])
-                        break
-                    except Exception as e:
-                        if attempt == max_retries - 1:
-                            raise
-                        print(f"Attempt {attempt + 1} failed: {str(e)}")
-                        time.sleep(5 * (attempt + 1))
-                        # Try a different proxy on retry
-                        proxy = get_working_proxy()
-                        if proxy:
-                            options["proxy"] = proxy
-                            ydl = yt_dlp.YoutubeDL(options)
+                # Perform the download
+                with yt_dlp.YoutubeDL(download_options) as downloader:
+                    print(f"Starting download with options: {download_options}")
+                    downloader.download([url])
 
-                # Look for the downloaded file
-                downloaded_files = os.listdir(download_dir)
-                if not downloaded_files:
-                    raise Exception("No files were downloaded")
+                # Verify the downloaded file
+                if not os.path.exists(output_file):
+                    raise Exception("Download failed - file not found")
 
-                # Get the actual downloaded file
-                actual_file = downloaded_files[0]
-                actual_filepath = os.path.join(download_dir, actual_file)
+                file_size = os.path.getsize(output_file)
+                if file_size == 0:
+                    raise Exception("Download failed - empty file")
 
-                if not os.path.exists(actual_filepath):
-                    raise Exception("Downloaded file not found")
+                print(f"File downloaded successfully: {output_file} ({file_size} bytes)")
 
-                print(f"File downloaded successfully: {actual_filepath}")
-                
-                # Send the file with proper filename and mime type
-                mimetype = 'audio/mpeg' if quality == "audio" else 'video/mp4'
-                response = send_file(
-                    actual_filepath,
-                    as_attachment=True,
-                    download_name=final_filename,
-                    mimetype=mimetype
-                )
-                
-                # Clean up files after sending
-                @response.call_on_close
-                def cleanup():
-                    try:
-                        if os.path.exists(actual_filepath):
-                            os.remove(actual_filepath)
-                        if os.path.exists(download_dir):
-                            os.rmdir(download_dir)
-                        if cookie_file and os.path.exists(cookie_file):
-                            os.remove(cookie_file)
-                    except Exception as e:
-                        print(f"Cleanup error: {e}")
-                
-                return response
+                # Send the file
+                try:
+                    response = send_file(
+                        output_file,
+                        as_attachment=True,
+                        download_name=os.path.basename(output_file),
+                        mimetype='audio/mpeg' if quality == "audio" else 'video/mp4'
+                    )
+
+                    # Clean up after sending
+                    @response.call_on_close
+                    def cleanup():
+                        try:
+                            if os.path.exists(output_file):
+                                os.remove(output_file)
+                            if os.path.exists(download_dir):
+                                os.rmdir(download_dir)
+                        except Exception as e:
+                            print(f"Cleanup error: {e}")
+
+                    return response
+
+                except Exception as e:
+                    print(f"Error sending file: {e}")
+                    raise
 
             except Exception as e:
+                error_msg = str(e)
+                if "Sign in to confirm you're not a bot" in error_msg:
+                    error_msg = "YouTube is detecting automated access. Please try again in a few minutes."
+                print(f"Download error: {error_msg}")
+                
                 # Clean up on error
                 try:
-                    if cookie_file and os.path.exists(cookie_file):
-                        os.remove(cookie_file)
                     if os.path.exists(download_dir):
                         import shutil
                         shutil.rmtree(download_dir)
                 except:
                     pass
-                    
-                error_msg = str(e)
-                if "Sign in to confirm you're not a bot" in error_msg:
-                    error_msg = "YouTube is detecting automated access. Please try again in a few minutes or try a different video."
-                print(f"Download error: {error_msg}")
+                
                 return jsonify({
                     "error": error_msg,
                     "details": "Try a different video or quality setting"
