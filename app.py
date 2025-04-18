@@ -2,36 +2,37 @@ from flask import Flask, render_template, request, jsonify, send_file
 import yt_dlp
 import os
 import platform
+import tempfile
 
 app = Flask(__name__)
 
-# Configure download folder based on environment and platform
+# Configure download folder based on environment
 if os.environ.get('FLASK_ENV') == 'production':
-    # For production (Docker/cloud) - use /app/downloads with proper permissions
-    DOWNLOAD_FOLDER = '/app/downloads'
+    DOWNLOAD_FOLDER = '/tmp/downloads'  # Use /tmp for Railway
 else:
-    # For local development - use platform-appropriate downloads folder
     if platform.system() == 'Windows':
         DOWNLOAD_FOLDER = os.path.join(os.environ.get('USERPROFILE', ''), 'Downloads')
     else:
         DOWNLOAD_FOLDER = os.path.join(os.path.expanduser('~'), 'Downloads')
 
-# Ensure the download folder exists and has correct permissions
+# Create temporary download directory with proper permissions
 try:
-    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-    # Make folder writable in production
     if os.environ.get('FLASK_ENV') == 'production':
-        os.chmod(DOWNLOAD_FOLDER, 0o777)
+        DOWNLOAD_FOLDER = tempfile.mkdtemp()  # Create a unique temporary directory
+    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+    print(f"Using download folder: {DOWNLOAD_FOLDER}")
 except Exception as e:
-    print(f"Warning: Could not create or set permissions for download folder: {e}")
+    print(f"Error setting up download folder: {e}")
+    # Fallback to /tmp if main directory creation fails
+    DOWNLOAD_FOLDER = tempfile.mkdtemp()
 
-# Updated Quality options for better compatibility
+# Quality options for different resolutions
 QUALITY_OPTIONS = {
-    "low": "worst[ext=mp4][height>=360]",
-    "medium": "best[ext=mp4][height<=480]",
-    "high": "best[ext=mp4][height<=720]",
-    "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-    "audio": "bestaudio"  # Simplified audio format
+    "low": "worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]",
+    "medium": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]",
+    "high": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]",
+    "best": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+    "audio": "bestaudio/best"
 }
 
 @app.route("/", methods=["GET"])
@@ -44,57 +45,65 @@ def download():
     quality = request.form["quality"]
 
     try:
+        # Create a unique subdirectory for this download
+        download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
+        print(f"Created download directory: {download_dir}")
+
         format_string = QUALITY_OPTIONS.get(quality, "best")
-        output_template = os.path.join(DOWNLOAD_FOLDER, "%(title)s.%(ext)s")
+        output_template = os.path.join(download_dir, "%(title)s.%(ext)s")
 
         options = {
             "format": format_string,
             "outtmpl": output_template,
-            "cookiefile": "cookies.txt",
             "verbose": True,
-            "no_warnings": False,  # Show warnings for better debugging
-            "extract_flat": False
+            "no_warnings": False
         }
 
-        # Special case for audio-only download in mp3 format
         if quality == "audio":
             options["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": "mp3",
                 "preferredquality": "192"
             }]
-            options["format"] = "bestaudio/best"  # Ensure we get the best audio
+            options["format"] = "bestaudio/best"
+
+        print(f"Download options: {options}")
+        print(f"Download directory exists: {os.path.exists(download_dir)}")
+        print(f"Download directory writable: {os.access(download_dir, os.W_OK)}")
 
         with yt_dlp.YoutubeDL(options) as ydl:
-            print(f"Downloading to folder: {DOWNLOAD_FOLDER}")
-            print(f"Current working directory: {os.getcwd()}")
-            print(f"Download folder exists: {os.path.exists(DOWNLOAD_FOLDER)}")
-            print(f"Download folder writable: {os.access(DOWNLOAD_FOLDER, os.W_OK)}")
-            
-            # Extract info first
-            info = ydl.extract_info(url, download=False)
-            print(f"Available formats: {[f['format'] for f in info['formats']]}")
-            
-            # Download the file
             info = ydl.extract_info(url, download=True)
             title = info.get("title", "downloaded")
+            
             if quality == "audio":
                 filename = f"{title}.mp3"
             else:
                 filename = f"{title}.mp4"
 
-            filepath = os.path.join(DOWNLOAD_FOLDER, filename)
-            print(f"Expected file path: {filepath}")
-            print(f"File exists: {os.path.exists(filepath)}")
+            filepath = os.path.join(download_dir, filename)
+            print(f"Looking for file at: {filepath}")
+
+            # List all files in download directory
+            print("Files in download directory:")
+            for file in os.listdir(download_dir):
+                print(f"- {file}")
 
             if os.path.exists(filepath):
-                return jsonify({"filename": filename})
+                response = send_file(filepath, as_attachment=True)
+                # Clean up the temporary directory after sending
+                try:
+                    os.remove(filepath)
+                    os.rmdir(download_dir)
+                except Exception as e:
+                    print(f"Cleanup error: {e}")
+                return response
             else:
+                available_files = os.listdir(download_dir)
                 return jsonify({
-                    "error": f"File not found at {filepath}",
-                    "download_folder": DOWNLOAD_FOLDER,
-                    "writable": os.access(DOWNLOAD_FOLDER, os.W_OK),
-                    "available_formats": [f['format'] for f in info['formats']]
+                    "error": "File not found after download",
+                    "expected_path": filepath,
+                    "available_files": available_files,
+                    "download_dir": download_dir
                 })
 
     except Exception as e:
@@ -108,11 +117,8 @@ def download():
 
 @app.route("/get_file/<filename>")
 def get_file(filename):
-    file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)
-    else:
-        return "File not found", 404
+    # This route is now deprecated as we send files directly in the download route
+    return "File download method changed", 410
 
 if __name__ == "__main__":
     app.run(debug=True)         
