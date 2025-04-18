@@ -4,6 +4,7 @@ import os
 import platform
 import tempfile
 import random
+import re
 
 app = Flask(__name__)
 
@@ -33,14 +34,23 @@ USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0'
 ]
 
-# Quality options using format IDs
-QUALITY_OPTIONS = {
-    "low": "18/135+140",  # 360p
-    "medium": "22/136+140",  # 720p
-    "high": "22/137+140",  # 1080p if available, else 720p
-    "best": "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",  # Best quality up to 1080p
-    "audio": "140/bestaudio[ext=m4a]/bestaudio"  # m4a audio / fallback best audio
-}
+def clean_filename(title):
+    # Remove invalid characters
+    title = re.sub(r'[<>:"/\\|?*]', '', title)
+    # Limit length
+    return title[:200]
+
+def get_video_id(url):
+    # Extract video ID from URL
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+        r'youtu\.be\/([0-9A-Za-z_-]{11})',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
 
 @app.route("/", methods=["GET"])
 def index():
@@ -52,40 +62,39 @@ def download():
     quality = request.form["quality"]
 
     try:
+        video_id = get_video_id(url)
+        if not video_id:
+            return jsonify({"error": "Invalid YouTube URL"})
+
         download_dir = tempfile.mkdtemp(dir=DOWNLOAD_FOLDER)
         print(f"Created download directory: {download_dir}")
 
-        format_string = QUALITY_OPTIONS.get(quality, "best")
-        output_template = os.path.join(download_dir, "%(title)s.%(ext)s")
-
-        # Enhanced options without cookie dependency
+        # Base options
         options = {
-            "format": format_string,
-            "outtmpl": output_template,
+            "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
             "verbose": True,
             "no_warnings": True,
             "http_headers": {
                 "User-Agent": random.choice(USER_AGENTS),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-us,en;q=0.5",
-                "Sec-Fetch-Mode": "navigate"
             },
             "nocheckcertificate": True,
-            "extractor_retries": 3,
-            "file_access_retries": 3,
-            "fragment_retries": 3,
-            "skip_download": False,
-            "rm_cachedir": True,
             "no_check_certificates": True,
             "prefer_insecure": True,
             "geo_bypass": True,
             "geo_bypass_country": "US",
             "socket_timeout": 30,
             "retries": 10,
+            "quiet": False,
+            "no_color": True,
+            "extract_flat": True,
             "force_generic_extractor": False,
-            "concurrent_fragment_downloads": 1
+            "youtube_include_dash_manifest": False,
+            "youtube_include_hls_manifest": False
         }
 
+        # Format selection based on quality
         if quality == "audio":
             options["format"] = "bestaudio"
             options["postprocessors"] = [{
@@ -94,44 +103,39 @@ def download():
                 "preferredquality": "192"
             }]
         else:
-            # Simplified format selection for video
             if quality == "low":
-                options["format"] = "worst[ext=mp4][height>=360]"
+                options["format"] = "18/134+140/worst[ext=mp4]"
             elif quality == "medium":
-                options["format"] = "best[height<=480][ext=mp4]"
+                options["format"] = "22/135+140/18"
             elif quality == "high":
-                options["format"] = "best[height<=720][ext=mp4]"
+                options["format"] = "22/136+140/18"
             else:  # best
-                options["format"] = "best[ext=mp4]/best"
-
-        print(f"Starting download with options: {options}")
+                options["format"] = "22/137+140/18"
 
         with yt_dlp.YoutubeDL(options) as ydl:
             try:
-                # Extract info first
-                info = ydl.extract_info(url, download=False)
-                print(f"Video info extracted: {info.get('title')}")
-                
-                # Proceed with download
-                info = ydl.extract_info(url, download=True)
-                title = info.get("title", "downloaded")
-                
+                # First try to extract info
+                meta = ydl.extract_info(url, download=False)
+                if not meta:
+                    raise Exception("Could not extract video metadata")
+
+                title = clean_filename(meta.get('title', 'video'))
+                print(f"Extracted title: {title}")
+
+                # Update options with confirmed title
                 if quality == "audio":
                     filename = f"{title}.mp3"
                 else:
                     filename = f"{title}.mp4"
 
+                options["outtmpl"] = os.path.join(download_dir, filename)
+                
+                # Attempt download
+                info = ydl.download([url])
+                
                 filepath = os.path.join(download_dir, filename)
-                print(f"Looking for file at: {filepath}")
-
-                # List directory contents
-                print("Files in download directory:")
-                for file in os.listdir(download_dir):
-                    print(f"- {file}")
-
                 if os.path.exists(filepath):
                     response = send_file(filepath, as_attachment=True)
-                    # Clean up
                     try:
                         os.remove(filepath)
                         os.rmdir(download_dir)
@@ -139,25 +143,22 @@ def download():
                         print(f"Cleanup error: {e}")
                     return response
                 else:
-                    # Try to find the actual file if filename doesn't match exactly
+                    # Try to find any downloaded file
                     files = os.listdir(download_dir)
-                    if files:  # If there are any files in the directory
-                        actual_file = files[0]  # Take the first file
+                    if files:
+                        actual_file = files[0]
                         actual_filepath = os.path.join(download_dir, actual_file)
                         response = send_file(actual_filepath, as_attachment=True)
-                        # Clean up
                         try:
                             os.remove(actual_filepath)
                             os.rmdir(download_dir)
                         except Exception as e:
                             print(f"Cleanup error: {e}")
                         return response
-                    
+
                     return jsonify({
-                        "error": "File not found after download",
-                        "expected_path": filepath,
-                        "available_files": os.listdir(download_dir),
-                        "download_dir": download_dir
+                        "error": "Download failed",
+                        "details": "File not found after download"
                     })
 
             except Exception as e:
@@ -171,8 +172,7 @@ def download():
         print(f"General error: {str(e)}")
         return jsonify({
             "error": str(e),
-            "download_folder": DOWNLOAD_FOLDER,
-            "folder_exists": os.path.exists(DOWNLOAD_FOLDER)
+            "details": "An unexpected error occurred"
         })
 
 @app.route("/get_file/<filename>")
