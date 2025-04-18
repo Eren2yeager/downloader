@@ -6,8 +6,8 @@ import tempfile
 import random
 import re
 import requests
-import json
-from datetime import datetime
+from datetime import datetime, time
+from http.cookiejar import MozillaCookieJar
 
 app = Flask(__name__)
 
@@ -64,24 +64,18 @@ def verify_recaptcha(response):
         return False
 
 def create_cookie_file():
-    cookie_data = [
-        {
-            "name": "CONSENT",
-            "value": YOUTUBE_CONSENT,
-            "domain": ".youtube.com",
-            "path": "/"
-        },
-        {
-            "name": "CONSENT",
-            "value": YOUTUBE_CONSENT,
-            "domain": "youtube.com",
-            "path": "/"
-        }
-    ]
-    
     cookie_file = os.path.join(tempfile.gettempdir(), 'youtube_cookies.txt')
-    with open(cookie_file, 'w') as f:
-        json.dump(cookie_data, f)
+    
+    # Create cookie file in Netscape format
+    with open(cookie_file, 'w', encoding='utf-8') as f:
+        f.write('# Netscape HTTP Cookie File\n')
+        f.write('# https://curl.haxx.se/rfc/cookie_spec.html\n')
+        f.write('# This is a generated file!  Do not edit.\n\n')
+        
+        # Add YouTube consent cookie
+        f.write(f'.youtube.com\tTRUE\t/\tFALSE\t{int(datetime.now().timestamp()) + 31536000}\tCONSENT\t{YOUTUBE_CONSENT}\n')
+        f.write(f'youtube.com\tTRUE\t/\tFALSE\t{int(datetime.now().timestamp()) + 31536000}\tCONSENT\t{YOUTUBE_CONSENT}\n')
+    
     return cookie_file
 
 @app.route("/", methods=["GET"])
@@ -118,7 +112,6 @@ def download():
         options = {
             "outtmpl": os.path.join(download_dir, "%(title)s.%(ext)s"),
             "cookiefile": cookie_file,
-            "cookiesfrombrowser": None,  # Disable browser cookies
             "quiet": False,
             "no_warnings": True,
             "extract_flat": False,
