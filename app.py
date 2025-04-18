@@ -77,21 +77,20 @@ def get_random_user_agent():
     return random.choice(user_agents)
 
 def get_browser_like_headers():
-    user_agent = get_random_user_agent()
-    chrome_version = "122.0.0.0"
-    
+    user_agent = "com.google.android.youtube/17.31.35 (Linux; U; Android 11) gzip"
     return {
         'User-Agent': user_agent,
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate',
-        'Origin': 'https://www.youtube.com',
-        'Referer': 'https://www.youtube.com/',
+        'Origin': 'https://m.youtube.com',
+        'Referer': 'https://m.youtube.com/',
         'Content-Type': 'application/json',
-        'X-YouTube-Client-Name': '1',
-        'X-YouTube-Client-Version': '2.20240321.04.00',
+        'X-YouTube-Client-Name': '2',
+        'X-YouTube-Client-Version': '17.31.35',
+        'X-Goog-Api-Format-Version': '2',
         'X-Goog-Visitor-Id': f"CgtVek{random.randint(100000, 999999)}",
-        'X-Origin': 'https://www.youtube.com',
+        'X-Origin': 'https://m.youtube.com',
         'Cookie': f'CONSENT={YOUTUBE_CONSENT}; VISITOR_INFO1_LIVE={random.randint(10**10, (10**11)-1)}; YSC={random.randint(10**10, (10**11)-1)}',
     }
 
@@ -190,11 +189,14 @@ def download():
             'nocheckcertificate': True,
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android'],
-                    'player_skip': ['webpage', 'config'],
+                    'player_client': ['android', 'mobile'],
+                    'player_skip': [],
+                    'client': ['android', 'mobile'],
+                    'player_params': {'playback_context': {'client': {'clientName': 'ANDROID', 'clientVersion': '17.31.35'}}},
                 }
             },
-            'extractor_retries': 3,
+            'socket_timeout': 15,
+            'retries': 3,
             'file_access_retries': 3,
             'fragment_retries': 3,
             'skip_download': False,
@@ -208,12 +210,12 @@ def download():
         # Add format-specific options
         if quality == "audio":
             ydl_opts.update({
+                'format': 'bestaudio/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }],
-                'format': 'bestaudio/best',
             })
         else:
             quality_formats = {
@@ -284,6 +286,8 @@ def download():
         error_msg = str(e)
         if "Sign in to confirm you're not a bot" in error_msg:
             error_msg = "YouTube is detecting automated access. Please try again with a different video or quality setting."
+        elif "not available on this app" in error_msg:
+            error_msg = "This video is not available for download. Please try a different video."
         print(f"Download error: {error_msg}")
         
         # Clean up on error
